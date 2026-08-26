@@ -28,6 +28,11 @@ XSS와 SQL Injection 진단 결과를 수집하고, 규칙 기반 1차 판정과
 ├── docs/                  # 아키텍처와 팀 문서
 ├── lab_app/               # 격리된 Flask 실습 웹앱
 ├── scanners/              # XSS·SQLi 스캐너와 공통 로직
+│   ├── base.py            # 인증 세션(LabSession), CSV 저장 등 공통 헬퍼
+│   ├── xss_config.py      # XSS 스캐너 설정(호스트/계정/타겟 목록) 로딩
+│   ├── xss_payloads.py    # AI 페이로드 생성 + 캐시 조회/저장
+│   ├── payload_cache.py   # 범용 페이로드 캐시 파일 입출력
+│   └── xss.py             # XSS 스캔 오케스트레이션(로그인 → 스캔 → CSV)
 ├── tests/                 # 자동화 테스트
 ├── .env.example
 ├── main.py                # 로컬 통합 실행 진입점
@@ -53,7 +58,9 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-`.env`의 `OPENAI_API_KEY`와 `OPENAI_MODEL`을 설정합니다. API 키, 비밀번호, 세션 키는 커밋하지 않습니다. AI 없이 개발할 때는 샘플/캐시 결과를 사용하도록 구현할 예정입니다.
+`.env`의 `OPENAI_API_KEY`, `OPENAI_MODEL`, `XSS_LAB_HOST`, `XSS_LAB_LOGIN`, `XSS_LAB_PASSWORD`를 설정합니다. API 키, 비밀번호, 세션 키는 커밋하지 않습니다.
+
+XSS 스캐너는 AI 페이로드를 매 실행마다 새로 생성하지 않습니다. `scanners/xss_payloads.py`가 `data/raw/xss_ai_payloads.json`(Git 제외)에 저장된 캐시를 확인해서, 파일이 있으면 그대로 재사용하고 없을 때만 OpenAI를 호출해 새로 생성 후 저장합니다. 최신 페이로드가 필요하면 `--refresh-payloads` 옵션으로 강제 재생성할 수 있습니다.
 
 이 저장소는 공개되므로 실습 서버의 실제 주소, AWS 계정 정보, 고정 IP, 세션 값, 원본 HTTP 응답에 포함된 개인정보도 커밋하지 않습니다.
 
@@ -68,6 +75,19 @@ flask --app lab_app.app run --debug
 ```bash
 python main.py --targets configs/targets.example.json
 ```
+
+### 4-1. XSS 스캐너 단독 실행
+
+```bash
+python scanners/xss.py --targets configs/xss_lab_targets.example.json
+```
+
+주요 옵션:
+
+- `--count`: 캐시가 없을 때 AI에게 요청할 페이로드 개수 (기본 100)
+- `--refresh-payloads`: 캐시를 무시하고 AI 페이로드를 새로 생성
+- `--payload-cache`: 캐시 파일 경로 (기본 `data/raw/xss_ai_payloads.json`)
+- `--output`: 결과 CSV 저장 경로 (기본 `data/raw/raw-findings-xss-multi.csv`)
 
 ### 5. 대시보드 실행
 
