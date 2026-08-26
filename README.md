@@ -11,7 +11,16 @@ AI-Triage Shield는 AWS에 의도적으로 취약한 실습용 웹 애플리케�
 
 ## 프로젝트 기획서
 
-![AI-Triage Shield 프로젝트 기획서](docs/project-plan.png)
+| 항목 | 내용 |
+| --- | --- |
+| 프로젝트명 | AI-Triage Shield |
+| 팀명 | 럭키세븐 |
+| 주제 | 생성형 AI 기반 2단계 트리아지 웹 취약점(XSS·SQL Injection) 자동 진단 플랫폼 |
+| 대상 환경 | AWS에 구축한 의도적으로 취약한 격리형 실습 웹 애플리케이션 |
+| 판정 방식 | 느슨한 1차 규칙 기반 탐지 후 생성형 AI로 정밀 판정 |
+| 결과물 | 표준 JSON, Streamlit 대시보드, Excel 보고서 |
+
+로그인·검색·게시판 등 실제 서비스와 유사한 기능에 취약 페이지와 방어 페이지를 함께 구축합니다. XSS와 SQL Injection 진단에는 동일한 2단계 판정 원칙을 적용하되, SQL Injection은 팀이 정한 정적 페이로드를 사용하고 XSS는 생성형 AI가 만든 페이로드를 검토·고정하여 재현성을 확보합니다. 최종 결과는 대시보드와 보고서에서 한눈에 확인할 수 있도록 구성합니다.
 
 ## 핵심 목표
 
@@ -84,7 +93,7 @@ flowchart LR
 │   ├── raw/               # 스캐너 원시 결과 (Git 제외)
 │   ├── processed/         # AI 분석 완료 결과 (Git 제외)
 │   └── exports/           # 생성된 Excel 보고서 (Git 제외)
-├── docs/                  # 아키텍처, 프로젝트 기획서
+├── docs/                  # 아키텍처 문서
 ├── lab_app/               # 격리된 Flask 실습 웹앱
 ├── scanners/              # XSS·SQLi 스캐너와 공통 로직
 ├── tests/                 # 자동화 테스트
