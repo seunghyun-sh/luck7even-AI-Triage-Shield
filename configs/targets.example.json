@@ -1,0 +1,30 @@
+[
+  {
+    "target_id": "xss-a",
+    "vuln_type": "XSS",
+    "url": "/case/xss-a",
+    "method": "GET",
+    "parameter": "name"
+  },
+  {
+    "target_id": "xss-b",
+    "vuln_type": "XSS",
+    "url": "/case/xss-b",
+    "method": "GET",
+    "parameter": "name"
+  },
+  {
+    "target_id": "sqli-a",
+    "vuln_type": "SQLI",
+    "url": "/case/sqli-a",
+    "method": "GET",
+    "parameter": "id"
+  },
+  {
+    "target_id": "sqli-b",
+    "vuln_type": "SQLI",
+    "url": "/case/sqli-b",
+    "method": "GET",
+    "parameter": "id"
+  }
+]
