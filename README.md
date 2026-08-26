@@ -1,18 +1,77 @@
-# AI 기반 웹 취약점 진단 자동화
+# AI-Triage Shield
 
-XSS와 SQL Injection 진단 결과를 수집하고, 규칙 기반 1차 판정과 OpenAI 기반 보조 분석을 거쳐 Streamlit 대시보드와 Excel 보고서로 제공하는 교육용 프로젝트입니다. 팀 협업과 결과 공유를 위한 Public 저장소로 운영합니다.
+> 생성형 AI 기반 2단계 트리아지 웹 취약점(XSS·SQL Injection) 자동 진단 플랫폼
 
-> 이 저장소의 스캐너는 팀이 직접 구축하고 접근 권한을 가진 격리된 실습 환경에서만 사용합니다. 외부 서비스나 허가받지 않은 시스템을 대상으로 실행하지 마세요.
+**Team Lucky Seven · 럭키세븐**
+
+AI-Triage Shield는 AWS에 의도적으로 취약한 실습용 웹 애플리케이션을 구축하고, **1차 규칙 기반 탐지(느슨함, 오탐 허용)**와 **2차 생성형 AI 정밀 판정**을 결합해 XSS·SQL Injection 취약점을 자동 진단하는 교육용 프로젝트입니다. 진단 결과는 표준 JSON으로 통합하여 Streamlit 대시보드와 Excel 보고서로 제공합니다.
+
+> [!WARNING]
+> 이 프로젝트는 팀이 직접 구축하거나 명시적으로 허가받은 격리 환경에서만 사용합니다. 외부 서비스와 허가받지 않은 시스템에는 절대 실행하지 마세요.
+
+## 프로젝트 기획서
+
+![AI-Triage Shield 프로젝트 기획서](docs/project-plan.png)
+
+## 핵심 목표
+
+1. XSS·SQL Injection 취약/안전 비교 웹 애플리케이션을 AWS에 구축·배포합니다.
+2. **느슨한 1차 규칙 기반 탐지 + 정밀한 2차 AI 판정** 자동화 파이프라인을 완성합니다.
+3. Burp Suite 수동 진단을 정답표로 삼아 Accuracy·Precision·Recall을 산출하고, SQLi 정적 페이로드 방식과 XSS AI 생성 방식을 탐색적으로 비교합니다.
+4. 진단 결과를 Streamlit 대시보드와 Excel 보고서로 자동 시각화·리포팅합니다.
+
+## 진단 전략
+
+```mermaid
+flowchart LR
+    A[허가된 Flask 실습 환경] --> B[XSS / SQLi 자동 진단]
+    B --> C[1차 규칙 기반 탐지]
+    C --> D[HTTP 증거와 raw JSON]
+    D --> E[2차 생성형 AI 정밀 판정]
+    E --> F[표준 processed JSON]
+    F --> G[Streamlit 대시보드]
+    F --> H[Excel 보고서]
+    I[Burp Suite 수동 진단] --> J[정답표]
+    J --> K[Accuracy / Precision / Recall]
+    F --> K
+```
+
+- 로그인·검색·게시판 등 실제 서비스와 유사한 기능에 취약 버전과 보안 조치가 적용된 버전을 함께 구성합니다.
+- SQL Injection은 팀이 검토한 **정적 페이로드 목록**을 사용합니다.
+- XSS는 생성형 AI가 만든 페이로드를 검토한 뒤 **버전을 고정**하여 재현성과 안전성을 확보합니다.
+- 두 진단 모두 공통 Finding 스키마와 동일한 2단계 판정 원칙을 적용합니다.
+- 사람이 만든 `ground_truth_label`은 AI 입력에서 제외하고 최종 평가에서만 사용합니다.
 
 ## 주요 기능
 
 - Flask 기반 XSS·SQLi 취약/방어 실습 환경
-- `requests` 기반 자동 진단 및 증거 수집
-- 공통 Finding 스키마와 규칙 기반 판정
-- OpenAI Responses API 기반 보조 분석
-- Streamlit 대시보드 및 Plotly 시각화
-- pandas/openpyxl 기반 Excel 보고서 생성
+- `requests` 및 Playwright/Selenium 기반 자동 진단과 증거 수집
+- 규칙 기반 1차 판정 및 OpenAI 기반 2차 보조 판정
 - Burp Suite 수동 진단 결과와 자동 판정 비교
+- Streamlit·Plotly 기반 결과 대시보드
+- pandas·openpyxl 기반 Excel 보고서 생성
+
+## 기술 스택
+
+| 영역 | 기술 |
+| --- | --- |
+| 웹 환경 | HTML, CSS, JavaScript, Python, Flask, MySQL, Docker |
+| AWS | VPC, EC2, RDS, S3 |
+| 자동 진단 | requests, pandas, Playwright/Selenium, Burp Suite |
+| AI 판정 | OpenAI API |
+| 시각화·보고 | Streamlit, Plotly, openpyxl |
+| 테스트·품질 | pytest, Ruff |
+
+## 팀 구성
+
+| 이름 | 담당 |
+| --- | --- |
+| 김용성 | 취약한 페이지 환경 구축 |
+| 김준영 (조장) | SQL Injection 자동화 |
+| 류하영 | XSS 자동화 |
+| 박종하 | 취약한 페이지 환경 구축 |
+| 송승준 | 대시보드 구현 |
+| 이승현 | 대시보드 구현 |
 
 ## 프로젝트 구조
 
@@ -25,7 +84,7 @@ XSS와 SQL Injection 진단 결과를 수집하고, 규칙 기반 1차 판정과
 │   ├── raw/               # 스캐너 원시 결과 (Git 제외)
 │   ├── processed/         # AI 분석 완료 결과 (Git 제외)
 │   └── exports/           # 생성된 Excel 보고서 (Git 제외)
-├── docs/                  # 아키텍처와 팀 문서
+├── docs/                  # 아키텍처, 프로젝트 기획서
 ├── lab_app/               # 격리된 Flask 실습 웹앱
 ├── scanners/              # XSS·SQLi 스캐너와 공통 로직
 ├── tests/                 # 자동화 테스트
@@ -53,9 +112,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-`.env`의 `OPENAI_API_KEY`와 `OPENAI_MODEL`을 설정합니다. API 키, 비밀번호, 세션 키는 커밋하지 않습니다. AI 없이 개발할 때는 샘플/캐시 결과를 사용하도록 구현할 예정입니다.
-
-이 저장소는 공개되므로 실습 서버의 실제 주소, AWS 계정 정보, 고정 IP, 세션 값, 원본 HTTP 응답에 포함된 개인정보도 커밋하지 않습니다.
+`.env`의 `OPENAI_API_KEY`와 `OPENAI_MODEL`을 설정합니다. API 키, 비밀번호, 세션 키, AWS 계정 정보, 고정 IP, 개인정보가 포함된 원본 응답은 커밋하지 않습니다.
 
 ### 3. 실습 웹앱 실행
 
@@ -75,34 +132,14 @@ python main.py --targets configs/targets.example.json
 streamlit run dashboard/app.py
 ```
 
-## 데이터 흐름
+## 협업 규칙
 
-```text
-Flask 실습 환경
-  -> XSS/SQLi 스캐너
-  -> 규칙 기반 판정 및 raw JSON
-  -> OpenAI 보조 판정 및 processed JSON
-  -> Streamlit 대시보드 / Excel 보고서
-```
-
-사람이 만든 `ground_truth_label`은 AI 입력에서 제외하고, 최종 평가 단계에서만 비교합니다. 웹 응답과 소스 코드 조각은 신뢰할 수 없는 데이터로 취급하며 프롬프트 지시로 실행하지 않습니다.
-
-## 브랜치 및 협업 규칙
-
-- 기본 브랜치: `main`
-- 작업 브랜치 예시: `feature/xss-scanner`, `feature/ai-triage`, `feature/dashboard`
+- 통합 브랜치: `develop`
+- 기능 브랜치: `feature/*`
 - 기능 단위 Pull Request 사용
-- PR 전에 `pytest`, `ruff check .` 실행
-- `.env`, 진단 원본, 생성 보고서, DB 파일 커밋 금지
-
-## 역할별 권장 담당 경로
-
-- 환경 구축: `lab_app/`, `configs/`
-- XSS/SQLi 진단: `scanners/`
-- AI 및 데이터 계약: `analysis/`
-- 대시보드 및 보고서: `dashboard/`
-- 통합과 검증: `main.py`, `tests/`, `docs/`
+- PR 전에 `pytest`와 `ruff check .` 실행
+- `.env`, 진단 원본, 생성 보고서, DB 파일은 커밋 금지
 
 ## 현재 상태
 
-초기 저장소 골격 단계입니다. 각 모듈은 인터페이스만 준비되어 있으며 실제 진단·AI 분석·보고서 기능은 이후 구현합니다.
+현재 저장소는 초기 골격 단계입니다. 모듈별 인터페이스와 실행 진입점이 준비되어 있으며, 진단·AI 분석·대시보드·보고서 기능은 각 담당 브랜치에서 구현합니다.
