@@ -14,7 +14,7 @@ from pathlib import Path
 
 LOGIN_PATH = "/bWAPP/login.php"
 DEFAULT_TARGETS_FILE = Path("configs/xss_lab_targets.example.json")
-DEFAULT_HOST = "http://127.0.0.1"
+DEFAULT_HOST = "http://192.168.199.130"
 DEFAULT_LOGIN = "bee"
 DEFAULT_PASSWORD = "bug"
 
