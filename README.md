@@ -89,8 +89,20 @@ python scanners/xss.py --targets configs/xss_lab_targets.example.json
 - `--refresh-payloads`: 캐시를 무시하고 AI 페이로드를 새로 생성
 - `--payload-cache`: 캐시 파일 경로 (기본 `data/raw/xss_ai_payloads.json`)
 - `--output`: 결과 JSON Lines 저장 경로 (기본 `data/raw/raw-findings-xss.jsonl`)
+- `--delay`: 매 HTTP 요청 사이에 대기할 시간(초). 실습 서버(가상머신)가 샷건식 요청 폭주로 500 에러를 내거나 멈추는 것을 막고 싶을 때 사용 (예: `--delay 0.5`). 기본값은 0(대기 없음)
+- `--timeout`: 요청 하나당 타임아웃(초). 응답이 이 시간 안에 안 오면 그 요청만 포기하고 다음으로 넘어감 (기본 5초)
 
 각 페이로드는 파라미터/헤더(`firstname`, `lastname`, ..., `User-Agent`, `Referer`, `bWAPP`)마다 한 번씩 개별적으로 주입되어, 어떤 파라미터가 실제로 반사됐는지 결과에서 정확히 구분할 수 있습니다. 대신 요청 수는 (URL × 페이로드 × 파라미터/헤더 수)만큼 늘어나므로, 대상이 많거나 `--count`를 크게 잡으면 스캔 시간이 길어집니다.
+
+**세션 만료 자동 대응**: 스캔 시간이 길어지면(공격 조합이 많을 때 30분 이상 걸릴 수 있음) 타겟 서버의 로그인 세션이 중간에 만료될 수 있습니다. `scanners/base.py`의 `LabSession`은 매 응답이 로그인 페이지로 리다이렉트됐는지 자동으로 확인하고, 그렇다면 즉시 재로그인한 뒤 같은 요청을 다시 시도합니다. 별도 옵션 없이 항상 동작합니다.
+
+**Stored XSS(저장형 XSS) 검증 범위**: 이 스캐너는 기본적으로 Reflected 방식(요청 1번 → 응답 1번)의 단일 응답 기반 판정에 집중합니다. 다만 타겟 목록 JSON에서 `"mode": "stored"`로 명시한 대상에 한해서는, 페이로드를 주입(POST/GET)한 뒤 별도의 조회 요청을 한 번 더 보내 실제로 저장되어 남아있는지까지 2단계로 확인합니다(조회 페이지가 다르면 `"verify_path"`로 지정 가능). 예시는 `configs/xss_lab_targets.example.json`의 `xss_stored_*.php` 항목을 참고하세요.
+
+```json
+{ "path": "/bWAPP/xss_stored_1.php", "mode": "stored" }
+```
+
+`mode`를 지정하지 않은 대상은 여전히 Reflected 판정만 수행하므로, 즉시 반사되지 않는 저장형 취약점은 놓칠 수 있습니다.
 
 결과 파일(`data/raw/raw-findings-xss.jsonl`)은 한 줄에 finding 하나씩 JSON으로 저장되며, 각 레코드는 다음 필드를 가집니다.
 
@@ -101,7 +113,7 @@ python scanners/xss.py --targets configs/xss_lab_targets.example.json
 | `url` | 공격 대상 URL |
 | `parameter` | 공격에 사용된 파라미터명(헤더명 포함) |
 | `payload` | 실제 주입한 공격 페이로드 |
-| `rule_label` | 1차 탐지 결과: `REFLECTED_UNSANITIZED`(그대로 반사=취약) / `REFLECTED_ESCAPED`(HTML 이스케이프되어 반사=안전) / `NOT_REFLECTED`(반사 안 됨) |
+| `rule_label` | 1차 탐지 결과: `REFLECTED_UNSANITIZED`(그대로 반사=취약) / `REFLECTED_ESCAPED`(HTML 이스케이프되어 반사=안전) / `NOT_REFLECTED`(반사 안 됨) / `STORED_XSS_CONFIRMED`(`mode: stored` 대상에서 조회 요청으로 저장까지 확인됨=가장 심각) |
 | `response_body` | 공격 후 돌아온 HTML 또는 에러 메시지 원본 텍스트 전체 |
 
 `response_body`는 응답 전체를 그대로 담기 때문에, 대상이 많거나 응답이 큰 경우 결과 파일 용량이 커질 수 있습니다.

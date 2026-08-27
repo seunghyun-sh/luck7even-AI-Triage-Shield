@@ -38,6 +38,35 @@ INJECTABLE_PARAMS = (
 # 헤더 등)이 있으므로 별도의 공격 벡터로 취급한다.
 INJECTABLE_HEADERS = ("User-Agent", "Referer", "bWAPP")
 
+# 타겟의 검증 방식. "reflected"(기본값)는 요청 1번의 응답만 보고 즉시 판정하고,
+# "stored"는 페이로드를 주입(POST)한 뒤 별도의 조회(GET) 요청으로 실제로 저장되어
+# 남아있는지까지 2단계로 확인한다. bWAPP의 xss_stored_*.php 같은 게시판/방명록형
+# 페이지가 여기 해당한다.
+MODE_REFLECTED = "reflected"
+MODE_STORED = "stored"
+
+
+@dataclass(frozen=True)
+class XSSTarget:
+    """공격 대상 페이지 1개에 대한 정보.
+
+    타겟 목록 JSON 파일의 각 항목은 다음 두 형태 중 하나일 수 있다.
+    1) 단순 문자열: "/bWAPP/xss_get.php" -> mode는 자동으로 "reflected"가 된다.
+    2) 객체: {"path": "/bWAPP/xss_stored_1.php", "mode": "stored"} 처럼
+       Stored XSS 2단계 검증이 필요한 대상을 명시적으로 표시할 수 있다.
+       조회 페이지가 주입 페이지와 다르면 "verify_path"로 별도 지정 가능하며,
+       생략하면 path와 동일한 페이지를 다시 조회한다.
+    """
+
+    path: str
+    mode: str = MODE_REFLECTED
+    verify_path: str | None = None
+
+    @property
+    def effective_verify_path(self) -> str:
+        """Stored 모드에서 실제로 재조회할 경로. 지정 안 했으면 주입 경로와 동일."""
+        return self.verify_path or self.path
+
 
 @dataclass(frozen=True)
 class XSSScanConfig:
@@ -46,7 +75,7 @@ class XSSScanConfig:
     host: str  # 예: "http://192.168.199.130" (끝에 슬래시 없음)
     login: str  # bWAPP 로그인 계정
     password: str  # bWAPP 로그인 비밀번호
-    target_paths: tuple[str, ...]  # host 뒤에 붙일 상대 경로들(예: "/bWAPP/xss_get.php")
+    targets: tuple[XSSTarget, ...]  # 공격 대상 페이지 목록(경로 + 검증 방식)
     request_timeout: float = 5.0  # 각 HTTP 요청의 타임아웃(초)
 
     @property
@@ -57,13 +86,30 @@ class XSSScanConfig:
     @property
     def target_urls(self) -> tuple[str, ...]:
         """공격 대상 경로들을 실제 호출 가능한 전체 URL로 변환한 목록."""
-        return tuple(f"{self.host}{path}" for path in self.target_paths)
+        return tuple(f"{self.host}{t.path}" for t in self.targets)
 
 
-def load_target_paths(targets_file: Path) -> tuple[str, ...]:
-    """타겟 목록 JSON 파일(문자열 배열)을 읽어서 튜플로 반환한다."""
+def load_targets(targets_file: Path) -> tuple[XSSTarget, ...]:
+    """타겟 목록 JSON 파일을 읽어서 XSSTarget 튜플로 변환한다.
+
+    문자열 항목과 객체 항목이 섞여 있어도 된다(위 XSSTarget 설명 참고).
+    """
     with targets_file.open(encoding="utf-8") as f:
-        return tuple(json.load(f))
+        raw_targets = json.load(f)
+
+    targets = []
+    for entry in raw_targets:
+        if isinstance(entry, str):
+            targets.append(XSSTarget(path=entry))
+        else:
+            targets.append(
+                XSSTarget(
+                    path=entry["path"],
+                    mode=entry.get("mode", MODE_REFLECTED),
+                    verify_path=entry.get("verify_path"),
+                )
+            )
+    return tuple(targets)
 
 
 def load_config(targets_file: Path | None = None) -> XSSScanConfig:
@@ -77,5 +123,5 @@ def load_config(targets_file: Path | None = None) -> XSSScanConfig:
         host=os.getenv("XSS_LAB_HOST", DEFAULT_HOST).rstrip("/"),
         login=os.getenv("XSS_LAB_LOGIN", DEFAULT_LOGIN),
         password=os.getenv("XSS_LAB_PASSWORD", DEFAULT_PASSWORD),
-        target_paths=load_target_paths(targets_file or DEFAULT_TARGETS_FILE),
+        targets=load_targets(targets_file or DEFAULT_TARGETS_FILE),
     )

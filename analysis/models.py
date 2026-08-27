@@ -9,6 +9,14 @@ from dataclasses import dataclass
 NOT_REFLECTED = "NOT_REFLECTED"  # 페이로드가 응답에 전혀 나타나지 않음 (필터링됨/무관)
 REFLECTED_ESCAPED = "REFLECTED_ESCAPED"  # HTML 이스케이프된 형태로만 반사됨 (대체로 안전)
 REFLECTED_UNSANITIZED = "REFLECTED_UNSANITIZED"  # 입력 그대로 반사됨 (취약 가능성 높음)
+# Reflected XSS는 "요청 -> 응답" 한 번으로 판정할 수 있지만, Stored XSS는 그렇지 않다.
+# 글을 쓸 때(POST)는 정상적으로 저장됐다는 메시지만 보일 수도 있고, 실제로 다른 사람이
+# 그 글을 읽을 때(GET, 별도 요청) 비로소 스크립트가 실행된다. 그래서 이 라벨은
+# xss_rules.classify_reflection()이 직접 매기지 않고, 스캐너(xss.py)가 "주입 요청"과
+# "조회 요청" 두 단계를 모두 수행해서 조회 응답에서도 페이로드가 그대로 남아있는 것을
+# 확인했을 때만 부여한다. REFLECTED_UNSANITIZED보다 심각도를 더 높게 두는 이유는,
+# 공격자 자신의 요청/응답에만 국한되지 않고 이후 방문자 전원에게 영향을 주기 때문이다.
+STORED_XSS_CONFIRMED = "STORED_XSS_CONFIRMED"
 
 
 @dataclass

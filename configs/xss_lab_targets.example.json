@@ -13,9 +13,9 @@
   "/bWAPP/xss_php_self.php",
   "/bWAPP/xss_referer.php",
   "/bWAPP/xss_user_agent.php",
-  "/bWAPP/xss_stored_1.php",
-  "/bWAPP/xss_stored_3.php",
-  "/bWAPP/xss_stored_2.php",
+  { "path": "/bWAPP/xss_stored_1.php", "mode": "stored" },
+  { "path": "/bWAPP/xss_stored_3.php", "mode": "stored" },
+  { "path": "/bWAPP/xss_stored_2.php", "mode": "stored" },
   "/bWAPP/xss_sqlitemanager.php",
-  "/bWAPP/xss_stored_4.php"
+  { "path": "/bWAPP/xss_stored_4.php", "mode": "stored" }
 ]

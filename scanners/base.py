@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import time
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import quote
@@ -36,12 +37,29 @@ class LabSession:
 
     내부적으로 requests.Session을 하나 유지해서 로그인 시 발급된 세션 쿠키가
     이후 모든 GET/POST 요청에 자동으로 실려 나가도록 한다.
+
+    추가로 두 가지를 자동 처리한다.
+    1) 세션 만료 감지 및 재로그인: 공격 조합이 많아 스캔이 오래 걸리면(예: 30분 이상)
+       타겟 서버(bWAPP)의 세션이 중간에 만료될 수 있다. 이 경우 요청이 로그인
+       페이지로 리다이렉트되어 이후 모든 결과가 "반사 안 됨"으로 잘못 기록되는
+       문제가 생긴다. get()/post()가 매 응답마다 로그인 페이지로 튕겼는지 확인하고,
+       그렇다면 자동으로 재로그인한 뒤 같은 요청을 한 번 더 시도한다.
+    2) 요청 간 지연(request_delay): 짧은 시간에 매우 많은 요청을 몰아 보내면
+       실습 대상(가상머신)의 CPU/메모리가 버티지 못하고 500 에러를 내거나 아예
+       응답 불능 상태에 빠질 수 있다. request_delay를 0보다 크게 주면 매 요청
+       사이에 그만큼(초 단위) 대기해서 서버 부하를 줄인다.
     """
 
-    def __init__(self, host: str, timeout: float = 5.0) -> None:
+    def __init__(self, host: str, timeout: float = 5.0, request_delay: float = 0.0) -> None:
         self.host = host.rstrip("/")  # 끝에 슬래시가 있어도 없어도 동작하도록 정규화
         self.timeout = timeout
+        self.request_delay = request_delay
         self._session = requests.Session()
+        # 재로그인에 필요한 정보. login()이 성공적으로 호출되면 채워지고,
+        # 이후 세션 만료가 감지될 때 이 값들로 다시 로그인을 시도한다.
+        self._login_path: str | None = None
+        self._credentials: dict | None = None
+        self._success_markers: tuple[str, ...] = ()
 
     def login(self, login_path: str, credentials: dict, success_markers: Iterable[str]) -> bool:
         """login_path로 자격 증명을 POST하고, 로그인 성공으로 보이는지 판단한다.
@@ -50,19 +68,58 @@ class LabSession:
         포함되어 있으면 로그인 성공으로 간주한다(예: "portal.php", "Welcome").
         이는 서버가 별도의 로그인 성공 API를 제공하지 않는 실습 환경 특성상
         휴리스틱으로 판단하는 것이며, 100% 정확하지는 않을 수 있다.
+
+        전달받은 인자들은 그대로 저장해두었다가, 스캔 도중 세션이 끊긴 것이
+        감지되면 동일한 조건으로 재로그인할 때 재사용한다.
         """
+        self._login_path = login_path
+        self._credentials = credentials
+        self._success_markers = tuple(success_markers)
+
         response = self._session.post(f"{self.host}{login_path}", data=credentials, timeout=self.timeout)
-        return any(marker in response.url or marker in response.text for marker in success_markers)
+        return any(marker in response.url or marker in response.text for marker in self._success_markers)
+
+    def _looks_logged_out(self, response: requests.Response) -> bool:
+        """응답이 로그인 페이지로 리다이렉트된 것처럼 보이는지 확인한다.
+
+        requests는 기본적으로 리다이렉트를 자동으로 따라가므로, 세션이 만료된
+        상태에서 아무 페이지나 요청해도 최종적으로 response.url이 로그인 페이지
+        주소로 바뀌어 있을 것이다. 이 휴리스틱으로 "방금 이 응답, 사실은 로그인
+        페이지를 받은 거 아닌가?"를 판단한다.
+        """
+        if not self._login_path:
+            return False
+        return self._login_path in response.url
+
+    def _reauth_and_retry(self, method: str, url: str, **kwargs) -> requests.Response:
+        """요청을 보내고, 세션이 만료된 것으로 보이면 재로그인 후 한 번 더 시도한다."""
+        send = getattr(self._session, method)
+        response = send(url, **kwargs)
+
+        if self._looks_logged_out(response):
+            print("[Session] 세션 만료가 감지되어 재로그인을 시도합니다...")
+            relogged_in = self.login(self._login_path, self._credentials, self._success_markers)
+            if not relogged_in:
+                print("[Session] 재로그인에 실패했습니다. 이후 결과가 부정확할 수 있습니다.")
+            # 재로그인 성공 여부와 관계없이 원래 요청을 한 번 더 시도한다.
+            # (재로그인이 실패했다면 이 재시도 결과도 로그인 페이지일 것이므로,
+            # 최소한 스캔이 멈추지 않고 계속 진행되도록 한다.)
+            response = send(url, **kwargs)
+
+        if self.request_delay > 0:
+            time.sleep(self.request_delay)
+
+        return response
 
     def get(self, url: str, **kwargs) -> requests.Response:
         """GET 요청. timeout을 지정하지 않으면 인스턴스 기본값을 사용한다."""
         kwargs.setdefault("timeout", self.timeout)
-        return self._session.get(url, **kwargs)
+        return self._reauth_and_retry("get", url, **kwargs)
 
     def post(self, url: str, **kwargs) -> requests.Response:
         """POST 요청. timeout을 지정하지 않으면 인스턴스 기본값을 사용한다."""
         kwargs.setdefault("timeout", self.timeout)
-        return self._session.post(url, **kwargs)
+        return self._reauth_and_retry("post", url, **kwargs)
 
 
 def write_csv(path: str | Path, rows: list[dict], fieldnames: list[str]) -> None:

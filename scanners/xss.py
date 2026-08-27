@@ -7,6 +7,9 @@
    "한 번에 하나의 벡터만" 공격해서, 어떤 파라미터/헤더가 실제로 반사를 일으켰는지
    정확히 특정할 수 있게 한다.
 4) 각 시도 결과를 규칙 기반으로 판정(xss_rules 모듈 담당)하고 Finding으로 만든다.
+   타겟이 "stored" 모드로 지정된 경우, 주입(POST) 응답만 보고 끝내지 않고 별도의
+   조회(GET) 요청을 한 번 더 보내 실제로 저장되어 남아있는지까지 확인한다
+   (자세한 내용은 아래 "Stored XSS 검증 범위" 참고).
 5) 모든 Finding을 data/raw/ 아래 JSON Lines 파일로 저장한다.
 
 실행 방법은 두 가지 다 지원한다.
@@ -15,6 +18,16 @@
 아래의 sys.path 보정 코드 덕분에 둘 다 정상 동작한다(스크립트로 직접 실행하면
 파이썬이 scanners/ 디렉터리만 sys.path에 넣어서, "scanners 패키지"를 못 찾는
 문제가 생기기 때문).
+
+Stored XSS 검증 범위:
+    Reflected XSS는 요청 1번 -> 응답 1번만 보면 판정할 수 있지만, Stored XSS는
+    "글을 쓸 때(POST) 주입하고, 그 글을 읽을 때(GET, 보통 별도 요청) 실행된다"는
+    특성 때문에 단일 응답만으로는 정확히 판별할 수 없다. 이 스캐너는 타겟 목록
+    JSON에서 `"mode": "stored"`로 명시된 대상에 한해서만 주입 후 별도 조회
+    요청으로 2단계 검증을 수행한다(XSSTarget.mode, xss_config.load_targets 참고).
+    그 외 모든 대상은 여전히 "단일 응답 기반 Reflected 판정"에 집중한다 -- 즉,
+    mode를 지정하지 않은 대상에서 저장형 취약점이 있어도 즉시 반사되지 않는 한
+    이 스캐너는 이를 놓칠 수 있다는 뜻이다.
 """
 
 from __future__ import annotations
@@ -35,7 +48,13 @@ from dotenv import load_dotenv
 
 from analysis.models import Finding
 from scanners import base, xss_payloads, xss_rules
-from scanners.xss_config import INJECTABLE_HEADERS, INJECTABLE_PARAMS, LOGIN_PATH, load_config
+from scanners.xss_config import (
+    INJECTABLE_HEADERS,
+    INJECTABLE_PARAMS,
+    LOGIN_PATH,
+    MODE_STORED,
+    load_config,
+)
 
 VULN_TYPE = "XSS"
 DEFAULT_OUTPUT = Path("data/raw/raw-findings-xss.jsonl")
@@ -63,6 +82,18 @@ def parse_args() -> argparse.Namespace:
         default=xss_payloads.DEFAULT_CACHE_PATH,
         help="Path to the cached AI payload file.",
     )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=0.0,
+        help="각 HTTP 요청 사이에 대기할 시간(초). 타겟 서버 부하를 줄이고 싶을 때 사용 (예: 0.5).",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=5.0,
+        help="각 HTTP 요청의 타임아웃(초). 응답이 이 시간 안에 안 오면 포기하고 다음 테스트로 넘어간다.",
+    )
     return parser.parse_args()
 
 
@@ -86,6 +117,9 @@ def _probe(session: base.LabSession, url: str, vector_name: str, vector_kind: st
     Finding.parameter 필드에 "실제로 반사를 일으킨 그 파라미터명"을 정확히
     기록할 수 있다. 예전 버전처럼 모든 파라미터에 동시에 같은 페이로드를 넣으면,
     반사가 확인돼도 어떤 파라미터 때문인지 알 수 없었다.
+
+    Stored 모드 타겟에서도 이 함수가 "주입(POST)" 단계 역할을 한다 -- 실제 저장
+    여부 확인(조회 단계)은 run_scan()에서 이 함수 호출 이후 별도로 수행한다.
     """
     attack_params = dict(FORM_TRIGGERS)
     attack_headers: dict[str, str] = {}
@@ -108,10 +142,43 @@ def _probe(session: base.LabSession, url: str, vector_name: str, vector_kind: st
     return xss_rules.most_severe((label_get, res_get.text), (label_post, res_post.text))
 
 
-def run_scan(session: base.LabSession, target_urls: list[str], payloads: list[str]) -> list[Finding]:
-    """모든 (타겟 URL x 페이로드 x 공격 벡터) 조합을 순회하며 스캔을 수행한다.
+def _verify_stored(
+    session: base.LabSession, verify_url: str, payload: str, initial: tuple[str, str]
+) -> tuple[str, str]:
+    """Stored XSS 2단계 검증: 방금 주입한 페이로드가 별도의 조회 요청에서도
+    그대로 남아있는지 확인한다.
 
-    조합 개수 = len(target_urls) * len(payloads) * len(vectors)이며, 파라미터별로
+    initial은 _probe()가 방금 반환한 (주입 응답 기준 판정, 응답 본문)이다.
+    조회 응답에서도 페이로드 원문이 그대로 나온다면, 이는 "그 요청/응답에서만
+    보이는 반사"가 아니라 실제로 서버에 저장되어 다른 방문자에게도 노출된다는
+    뜻이므로 STORED_XSS_CONFIRMED로 승격한다. 조회 요청이 실패하거나 조회
+    응답에서 확인되지 않으면, 주입 단계에서 이미 확인된 결과(initial)를 그대로
+    유지한다 -- 즉 이 함수는 판정을 절대 낮추지 않고, 더 강한 증거가 있을 때만
+    끌어올린다.
+    """
+    try:
+        verify_res = session.get(verify_url)
+    except (requests.RequestException, UnicodeError):
+        return initial
+
+    verify_label = xss_rules.classify_reflection(payload, verify_res.text)
+    if verify_label == xss_rules.REFLECTED_UNSANITIZED:
+        # 조회 페이지에도 원문 그대로 남아있음 -> 저장형 XSS로 확정.
+        verify_label = xss_rules.STORED_XSS_CONFIRMED
+
+    return xss_rules.most_severe(initial, (verify_label, verify_res.text))
+
+
+def run_scan(
+    session: base.LabSession, targets: list[tuple[str, str, str]], payloads: list[str]
+) -> list[Finding]:
+    """모든 (타겟 x 페이로드 x 공격 벡터) 조합을 순회하며 스캔을 수행한다.
+
+    targets는 (url, mode, verify_url) 튜플의 리스트다. mode가 "stored"인
+    타겟은 _probe()로 주입한 뒤 _verify_stored()로 조회 검증까지 추가로
+    수행하므로 HTTP 요청이 그만큼 더 발생한다.
+
+    조합 개수 = len(targets) * len(payloads) * len(vectors)이며, 파라미터별로
     개별 공격하기 때문에(vectors가 11개: 파라미터 8개 + 헤더 3개) 예전의
     "한 번에 다 넣기" 방식보다 요청 수가 훨씬 많아진다. 그 대신 각 finding의
     parameter 필드가 정확해진다는 장점이 있다.
@@ -121,8 +188,9 @@ def run_scan(session: base.LabSession, target_urls: list[str], payloads: list[st
     vectors = _attack_vectors()
     tests_per_url = len(payloads) * len(vectors)
 
-    for url_idx, url in enumerate(target_urls, 1):
-        print(f"\n[{url_idx}/{len(target_urls)}] 타겟 스캔 중: {url} (테스트 {tests_per_url}건)")
+    for url_idx, (url, mode, verify_url) in enumerate(targets, 1):
+        mode_label = " [stored]" if mode == MODE_STORED else ""
+        print(f"\n[{url_idx}/{len(targets)}] 타겟 스캔 중: {url}{mode_label} (테스트 {tests_per_url}건)")
         test_no = 0
 
         for payload in payloads:
@@ -138,6 +206,13 @@ def run_scan(session: base.LabSession, target_urls: list[str], payloads: list[st
                     # 전체 스캔은 계속 진행한다.
                     skipped += 1
                     continue
+
+                if mode == MODE_STORED:
+                    # 주입 응답만으로는 판단할 수 없으므로, 별도 조회 요청으로
+                    # 실제 저장 여부까지 한 번 더 확인한다.
+                    rule_label, response_body = _verify_stored(
+                        session, verify_url, payload, (rule_label, response_body)
+                    )
 
                 # 취약 가능성이 있는 경우(NOT_REFLECTED가 아님)는 바로바로 출력해서
                 # 실시간으로 눈에 띄게 하고, 그렇지 않은 평범한 진행 상황은
@@ -175,10 +250,14 @@ def main() -> None:
     print("=" * 50)
     print("[다중 URL] 지능형 XSS 스캐너 작동 시작")
     print("=" * 50)
+    print(f"[설정] timeout={args.timeout}s, delay={args.delay}s")
 
     # 1단계: 로그인
     print(f"\n[1단계] 로그인 시도 중... (URL: {config.login_url})")
-    session = base.LabSession(config.host, timeout=config.request_timeout)
+    # timeout/delay는 CLI에서 넘어온 값을 그대로 세션에 적용한다.
+    # LabSession은 이후 모든 GET/POST에서 세션 만료를 감지해 자동 재로그인하고,
+    # request_delay만큼 매 요청 사이에 대기해서 타겟 서버 부하를 조절한다.
+    session = base.LabSession(config.host, timeout=args.timeout, request_delay=args.delay)
     try:
         logged_in = session.login(
             LOGIN_PATH,
@@ -199,12 +278,18 @@ def main() -> None:
         force_refresh=args.refresh_payloads,
     )
 
+    # run_scan이 쓰기 편하도록 (전체 URL, 모드, 조회용 전체 URL) 튜플로 미리 변환해둔다.
+    targets = [
+        (f"{config.host}{t.path}", t.mode, f"{config.host}{t.effective_verify_path}") for t in config.targets
+    ]
+    stored_count = sum(1 for _, mode, _ in targets if mode == MODE_STORED)
+
     vector_count = len(_attack_vectors())
     print(
         f"\n[2단계] 파라미터별 개별 공격 스캔 시작... "
-        f"(타겟: {len(config.target_urls)}개, 페이로드: {len(payloads)}개, 공격 벡터: {vector_count}개)"
+        f"(타겟: {len(targets)}개[stored {stored_count}개], 페이로드: {len(payloads)}개, 공격 벡터: {vector_count}개)"
     )
-    findings = run_scan(session, list(config.target_urls), payloads)
+    findings = run_scan(session, targets, payloads)
 
     # 3단계: 결과를 JSON Lines 파일로 저장(한 줄 = Finding 1건).
     base.write_jsonl(args.output, [f.to_dict() for f in findings])

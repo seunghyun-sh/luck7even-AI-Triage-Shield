@@ -10,11 +10,24 @@ from __future__ import annotations
 
 import html
 
-from analysis.models import NOT_REFLECTED, REFLECTED_ESCAPED, REFLECTED_UNSANITIZED
+from analysis.models import (
+    NOT_REFLECTED,
+    REFLECTED_ESCAPED,
+    REFLECTED_UNSANITIZED,
+    STORED_XSS_CONFIRMED,
+)
 
 # 판정 라벨별 심각도 점수. 숫자가 클수록 더 위험하다고 간주한다.
-# GET/POST 두 응답 중 더 심각한 쪽을 최종 결과로 채택할 때 사용됨(most_severe 참고).
-_SEVERITY = {NOT_REFLECTED: 0, REFLECTED_ESCAPED: 1, REFLECTED_UNSANITIZED: 2}
+# GET/POST 두 응답 중 더 심각한 쪽을 최종 결과로 채택할 때, 그리고 저장형 XSS의
+# "주입 응답"과 "조회 응답" 판정을 합칠 때 모두 이 우선순위로 비교한다(most_severe 참고).
+# STORED_XSS_CONFIRMED는 이 모듈이 직접 매기지 않고 xss.py가 조회(GET) 응답에서도
+# 페이로드가 그대로 남아있음을 확인했을 때만 승격시키므로, 여기서는 심각도 값만 정의한다.
+_SEVERITY = {
+    NOT_REFLECTED: 0,
+    REFLECTED_ESCAPED: 1,
+    REFLECTED_UNSANITIZED: 2,
+    STORED_XSS_CONFIRMED: 3,
+}
 
 
 def classify_reflection(payload: str, response_body: str) -> str:
