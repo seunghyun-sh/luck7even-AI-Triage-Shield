@@ -118,6 +118,8 @@ confidence 평균은 핵심 KPI로 제공하지 않는다.
 
 - ground truth는 processed JSON과 별도로 읽는다.
 - `(target_set_id, case_id)`로 결합하고 결합 cardinality와 `vuln_type` 일치를 검증한다.
+- 화면 필터 범위의 SQLi 지표를 계산하기 전에 전체 validated processed DataFrame과 전체 GroundTruthSet을 `build_evaluation`으로 먼저 검증한다. 따라서 필터로 제외된 case의 target set 불일치, 누락 case, 중복 key, SQLI 이외 ground truth, vuln_type 불일치도 평가 결합 오류로 유지한다.
+- 전체 검증이 성공한 뒤에만 현재 필터의 SQLi `case_id`와 교집합인 ground truth subset으로 화면 범위 지표를 계산한다. 교집합이 비어 있으면 유효한 빈 평가 상태를 표시한다.
 - 결합 오류가 있어도 일반 결과 검토는 유지하고 평가만 중단한다.
 - positive class는 `VULNERABLE`이다.
 - 평가 cohort는 binary ground truth, `ai.status=COMPLETED`, binary AI label을 모두 만족한 항목이다.

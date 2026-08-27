@@ -325,27 +325,51 @@ def _render_detail(df: pd.DataFrame) -> None:
             st.code(_text(finding[column]), language="text")
 
 
-def _render_evaluation(df: pd.DataFrame, ground_truth: Any) -> dict[str, Any] | None:
+def _build_filtered_evaluation(
+    full_findings: pd.DataFrame,
+    filtered_findings: pd.DataFrame,
+    ground_truth: Any,
+) -> dict[str, Any] | None:
+    """Validate all inputs before calculating evaluation for the visible SQLi scope."""
+
+    if ground_truth is None:
+        return None
+
+    build_evaluation(full_findings, ground_truth)
+    filtered_sqli_case_ids = set(
+        filtered_findings.loc[
+            filtered_findings["vuln_type"].eq("SQLI"), "case_id"
+        ]
+    )
+    filtered_ground_truth = ground_truth.model_copy(
+        update={
+            "cases": [
+                case
+                for case in ground_truth.cases
+                if case.case_id in filtered_sqli_case_ids
+            ]
+        }
+    )
+    return build_evaluation(filtered_findings, filtered_ground_truth)
+
+
+def _render_evaluation(
+    full_findings: pd.DataFrame,
+    filtered_findings: pd.DataFrame,
+    ground_truth: Any,
+) -> dict[str, Any] | None:
     if ground_truth is None:
         return None
     st.markdown("<p class='section-label'>SQLi 조건부 평가</p>", unsafe_allow_html=True)
     try:
-        filtered_ground_truth = ground_truth.model_copy(
-            update={
-                "cases": [
-                    case
-                    for case in ground_truth.cases
-                    if case.case_id
-                    in set(df.loc[df["vuln_type"].eq("SQLI"), "case_id"])
-                ]
-            }
+        evaluation = _build_filtered_evaluation(
+            full_findings, filtered_findings, ground_truth
         )
-        evaluation = build_evaluation(df, filtered_ground_truth)
-    except (ValueError, KeyError, TypeError) as error:
-        st.warning(f"평가 데이터를 결합할 수 없습니다: {_text(error)}")
+    except (ValueError, KeyError, TypeError):
+        st.warning("평가 데이터를 결합할 수 없습니다.")
         return None
 
-    if not evaluation:
+    if not evaluation or evaluation["n_labeled"] == 0:
         st.info("현재 필터에 평가 가능한 SQLi 항목이 없습니다.")
         return evaluation
     metrics = [
@@ -810,7 +834,7 @@ def _render_review_tab() -> None:
             column_config={"confidence": st.column_config.NumberColumn(format="%.2f")},
         )
         _render_detail(filtered)
-    evaluation = _render_evaluation(filtered, ground_truth)
+    evaluation = _render_evaluation(findings, filtered, ground_truth)
 
     try:
         report = build_excel_report(

@@ -6,14 +6,23 @@ from datetime import timedelta
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from streamlit.testing.v1 import AppTest
 
-from dashboard.app import _report_frame
+from dashboard.app import _build_filtered_evaluation, _report_frame
+from dashboard.data_loader import (
+    findings_to_dataframe,
+    load_ground_truth,
+    load_processed_data,
+)
 from orchestration.models import ExecutionStage, ExecutionStatus, RunError, RunRequest
 from orchestration.run_store import RunStore
 
 APP_PATH = Path(__file__).resolve().parents[1] / "dashboard" / "app.py"
 SAMPLE_PATH = Path(__file__).resolve().parents[1] / "configs" / "triaged-results.example.json"
+GROUND_TRUTH_PATH = (
+    Path(__file__).resolve().parents[1] / "configs" / "ground-truth.example.json"
+)
 PROCESSED_PATH = Path(__file__).resolve().parents[1] / "data" / "processed"
 
 
@@ -246,6 +255,95 @@ def test_dashboard_renders_conditional_sqli_evaluation() -> None:
         "N_scored": "1",
         "Scored coverage": "25.0%",
     }
+
+
+def _evaluation_inputs():
+    findings = findings_to_dataframe(load_processed_data(SAMPLE_PATH))
+    ground_truth = load_ground_truth(GROUND_TRUTH_PATH)
+    xss_only = findings.loc[findings["vuln_type"].eq("XSS")].copy()
+    return findings, xss_only, ground_truth
+
+
+@pytest.mark.parametrize(
+    ("invalid_ground_truth", "invalid_findings", "error"),
+    [
+        (
+            lambda truth: truth.model_copy(
+                update={
+                    "cases": [
+                        *truth.cases,
+                        truth.cases[0].model_copy(update={"case_id": "unknown-case"}),
+                    ]
+                }
+            ),
+            lambda findings: findings,
+            "missing",
+        ),
+        (
+            lambda truth: truth.model_copy(
+                update={"target_set_id": "wrong-target-set"}
+            ),
+            lambda findings: findings,
+            "missing",
+        ),
+        (
+            lambda truth: truth.model_copy(
+                update={
+                    "cases": [
+                        truth.cases[0].model_copy(update={"vuln_type": "XSS"}),
+                        *truth.cases[1:],
+                    ]
+                }
+            ),
+            lambda findings: findings,
+            "SQLI",
+        ),
+        (
+            lambda truth: truth,
+            lambda findings: findings.assign(
+                vuln_type=findings["vuln_type"].mask(
+                    findings["case_id"].eq("sqli-search-a"), "XSS"
+                )
+            ),
+            "vuln_type",
+        ),
+    ],
+)
+def test_filter_scoped_evaluation_rejects_full_input_errors_hidden_by_xss_filter(
+    invalid_ground_truth, invalid_findings, error: str
+) -> None:
+    findings, xss_only, ground_truth = _evaluation_inputs()
+
+    with pytest.raises(ValueError, match=error):
+        _build_filtered_evaluation(
+            invalid_findings(findings), xss_only, invalid_ground_truth(ground_truth)
+        )
+
+
+def test_filter_scoped_evaluation_allows_empty_sqli_scope_after_full_validation() -> None:
+    findings, xss_only, ground_truth = _evaluation_inputs()
+
+    evaluation = _build_filtered_evaluation(findings, xss_only, ground_truth)
+
+    assert evaluation["n_labeled"] == 0
+    assert evaluation["annotations"] == []
+
+
+def test_dashboard_shows_empty_evaluation_for_xss_only_filter() -> None:
+    app = _review(AppTest.from_file(str(APP_PATH)).run(timeout=30))
+    app.radio[1].set_value("샘플 사용").run(timeout=30)
+    vuln_type_filter = next(
+        multiselect
+        for multiselect in app.multiselect
+        if multiselect.label == "취약점 유형"
+    )
+    vuln_type_filter.set_value(["XSS"]).run(timeout=30)
+
+    assert not app.exception
+    assert any(
+        "현재 필터에 평가 가능한 SQLi 항목이 없습니다." in info.value
+        for info in app.info
+    )
 
 
 def test_report_frame_adds_ground_truth_annotations_and_unlabeled_exclusion() -> None:
