@@ -17,6 +17,7 @@ from pathlib import Path
 LOGIN_PATH = "/bWAPP/login.php"
 # --targets 옵션을 안 주면 사용할 기본 타겟 목록 파일(저장소에 커밋된 예시 파일).
 DEFAULT_TARGETS_FILE = Path("configs/xss_lab_targets.example.json")
+
 # 환경 변수가 하나도 설정 안 되어 있을 때 쓰는 기본값들(로컬 개발 편의용).
 DEFAULT_HOST = "http://127.0.0.1"
 DEFAULT_LOGIN = "bee"
