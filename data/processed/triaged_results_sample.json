@@ -1,0 +1,35 @@
+[
+  {
+    "finding_id": "XSS-001",
+    "vuln_type": "XSS",
+    "ai_label": "취약 의심",
+    "confidence": "high",
+    "evidence_summary": "응답 본문에 주입한 스크립트가 필터링 없이 그대로 포함되어 있어 실행 가능함.",
+    "recommendation": "입력값에 대한 적절한 인코딩 및 필터링을 적용하여 XSS 공격을 방어해야 합니다.",
+    "url": "http://target/search",
+    "parameter": "q",
+    "payload": "<script>alert(1)</script>"
+  },
+  {
+    "finding_id": "XSS-002",
+    "vuln_type": "XSS",
+    "ai_label": "양호",
+    "confidence": "high",
+    "evidence_summary": "응답 본문에서 주입한 페이로드가 HTML Entity로 안전하게 치환되어 있어 스크립트가 실행되지 않음.",
+    "recommendation": "입력값을 항상 적절히 인코딩하여 XSS 공격을 방어하도록 하십시오.",
+    "url": "http://target/search",
+    "parameter": "q",
+    "payload": "<script>alert(1)</script>"
+  },
+  {
+    "finding_id": "SQLI-001",
+    "vuln_type": "SQLi",
+    "ai_label": "취약 의심",
+    "confidence": "high",
+    "evidence_summary": "주입한 페이로드가 SQL 구문 오류를 발생시킴.",
+    "recommendation": "입력값에 대한 적절한 검증 및 Prepared Statement 사용을 권장합니다. SQL Injection 공격을 방어하기 위해 사용자 입력을 안전하게 처리해야 합니다. 또한, 에러 메시지를 사용자에게 노출하지 않도록 설정해야 합니다.",
+    "url": "http://target/login",
+    "parameter": "id",
+    "payload": "' OR 1=1 --"
+  }
+]
