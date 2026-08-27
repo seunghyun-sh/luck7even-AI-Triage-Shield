@@ -14,6 +14,8 @@ import httpx
 
 from analysis.models import TargetManifest
 
+from .run_store import RunStore
+
 HEALTH_TIMEOUT_SECONDS = 1.0
 _SCANNER_MODULES = {"XSS": "scanners.xss", "SQLI": "scanners.sqli"}
 
@@ -95,9 +97,12 @@ def _component_available(
 ) -> bool:
     try:
         module = importer(module_name)
-    except (ImportError, AttributeError, RuntimeError):
+    except Exception:  # noqa: BLE001 - plugin boundary must normalize init failures
         return False
-    return callable(getattr(module, attribute, None))
+    try:
+        return callable(getattr(module, attribute, None))
+    except Exception:  # noqa: BLE001 - descriptors may execute plugin code
+        return False
 
 
 def _data_root_writable(data_root: Path) -> bool:
@@ -192,7 +197,10 @@ def run_preflight(
         )
     )
 
-    lock_active = (Path(data_root) / "runs" / ".pipeline.lock").exists()
+    try:
+        lock_active = RunStore(data_root).pipeline_lock_active()
+    except (OSError, ValueError):
+        lock_active = True
     checks.append(
         _check(
             "전역 실행 잠금",

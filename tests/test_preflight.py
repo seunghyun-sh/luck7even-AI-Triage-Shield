@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 from analysis.models import TargetCase, TargetInput, TargetManifest, VulnType
+from orchestration.models import ExecutionStatus, RunRequest
 from orchestration.preflight import Readiness, run_preflight
+from orchestration.run_store import RunStore
 
 
 def _manifest() -> TargetManifest:
@@ -102,6 +105,25 @@ def test_preflight_blocks_missing_components(tmp_path: Path) -> None:
     assert {"SCANNER_UNAVAILABLE", "AI_TRIAGE_UNAVAILABLE"} <= _codes(result)
 
 
+def test_preflight_normalizes_arbitrary_component_initialization_error(
+    tmp_path: Path,
+) -> None:
+    def broken_importer(name: str) -> object:
+        raise ValueError("api_key=secret /private/path")
+
+    result = run_preflight(
+        _manifest(),
+        ["XSS"],
+        tmp_path,
+        http_requester=lambda *args, **kwargs: SimpleNamespace(status_code=200),
+        module_importer=broken_importer,
+    )
+
+    scanner = next(check for check in result.checks if check.name == "XSS 스캐너")
+    assert scanner.code == "SCANNER_UNAVAILABLE"
+    assert "secret" not in scanner.message
+
+
 def test_preflight_blocks_active_lock(tmp_path: Path) -> None:
     lock_path = tmp_path / "runs" / ".pipeline.lock"
     lock_path.parent.mkdir()
@@ -116,6 +138,34 @@ def test_preflight_blocks_active_lock(tmp_path: Path) -> None:
     )
 
     assert "PIPELINE_LOCK_ACTIVE" in _codes(result)
+
+
+def test_preflight_recovers_verified_stale_lock(tmp_path: Path) -> None:
+    store = RunStore(tmp_path)
+    status = store.create_run(
+        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+    )
+    lock_path = store.runs_dir / ".pipeline.lock"
+    lock_path.write_text(
+        json.dumps(
+            {
+                "pid": 2_147_483_647,
+                "scan_run_id": status.scan_run_id,
+                "created_at": status.started_at.isoformat(),
+            }
+        )
+    )
+
+    result = run_preflight(
+        _manifest(),
+        ["XSS"],
+        tmp_path,
+        http_requester=lambda *args, **kwargs: SimpleNamespace(status_code=200),
+        module_importer=_importer,
+    )
+
+    assert "PIPELINE_LOCK_CLEAR" in _codes(result)
+    assert store.load_status(status.scan_run_id).status is ExecutionStatus.FAILED
 
 
 def test_preflight_blocks_missing_manifest_type(tmp_path: Path) -> None:

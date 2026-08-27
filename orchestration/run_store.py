@@ -15,6 +15,7 @@ from .models import (
     ExecutionStage,
     ExecutionStatus,
     Progress,
+    RunError,
     RunRequest,
     RunStatusDocument,
     _validate_run_id,
@@ -210,15 +211,103 @@ class RunStore:
         )
 
     def pipeline_lock(self, scan_run_id: str) -> PipelineLock:
+        self.recover_stale_pipeline_lock()
         return PipelineLock(self.data_root, scan_run_id)
+
+    def pipeline_lock_active(self) -> bool:
+        """Return whether a live owner still holds the global pipeline lock."""
+
+        self.recover_stale_pipeline_lock()
+        return (self.runs_dir / ".pipeline.lock").exists()
+
+    def recover_stale_pipeline_lock(self) -> bool:
+        """Recover a lock only after verifying both owner death and run state."""
+
+        lock_path = self.runs_dir / ".pipeline.lock"
+        try:
+            original = lock_path.read_bytes()
+            payload = json.loads(original)
+        except FileNotFoundError:
+            return False
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            return False
+        if not isinstance(payload, dict):
+            return False
+        pid = payload.get("pid")
+        scan_run_id = payload.get("scan_run_id")
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            return False
+        try:
+            scan_run_id = _validate_run_id(scan_run_id)
+        except (TypeError, ValueError):
+            return False
+        if self._pid_is_alive(pid):
+            return False
+        try:
+            status = self.load_status(scan_run_id)
+        except (FileNotFoundError, ValueError):
+            return False
+        terminal = {
+            ExecutionStatus.COMPLETED,
+            ExecutionStatus.PARTIAL,
+            ExecutionStatus.FAILED,
+        }
+        if status.status not in terminal:
+            now = max(datetime.now().astimezone(), status.updated_at)
+            failed = status.model_copy(
+                update={
+                    "status": ExecutionStatus.FAILED,
+                    "stage": None,
+                    "updated_at": now,
+                    "completed_at": now,
+                    "processed_result_path": None,
+                    "error": RunError(
+                        code="STALE_RUN_RECOVERED",
+                        message="The previous pipeline process is no longer running.",
+                        retryable=True,
+                    ),
+                }
+            )
+            self.save_status(failed)
+        try:
+            if lock_path.read_bytes() != original:
+                return False
+            lock_path.unlink()
+        except FileNotFoundError:
+            return True
+        return True
+
+    @staticmethod
+    def _pid_is_alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return True
+        return True
+
+    def responses_dir(self, scan_run_id: str) -> Path:
+        """Return the contained evidence directory for an existing run."""
+
+        scan_run_id = _validate_run_id(scan_run_id)
+        self.load_request(scan_run_id)
+        path = self._contained_artifact_path("raw", scan_run_id, "responses")
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     def publish_raw(self, raw_run: RawRun) -> str:
         """Validate and atomically publish a canonical raw artifact."""
 
         raw_run = RawRun.model_validate(raw_run.model_dump(mode="json"))
-        path = self.data_root / "raw" / raw_run.scan_run_id / "findings.json"
+        scan_run_id = self._validate_artifact_identity(
+            raw_run.scan_run_id, raw_run.target_set_id
+        )
+        path = self._contained_artifact_path("raw", scan_run_id, "findings.json")
         self._atomic_write_json(path, raw_run.model_dump(mode="json"))
-        return f"raw/{raw_run.scan_run_id}/findings.json"
+        return f"raw/{scan_run_id}/findings.json"
 
     def publish_processed(self, processed_run: ProcessedRun) -> str:
         """Validate and atomically publish a canonical processed artifact."""
@@ -226,9 +315,34 @@ class RunStore:
         processed_run = ProcessedRun.model_validate(
             processed_run.model_dump(mode="json")
         )
-        path = self.data_root / "processed" / processed_run.scan_run_id / "results.json"
+        scan_run_id = self._validate_artifact_identity(
+            processed_run.scan_run_id, processed_run.target_set_id
+        )
+        path = self._contained_artifact_path(
+            "processed", scan_run_id, "results.json"
+        )
         self._atomic_write_json(path, processed_run.model_dump(mode="json"))
-        return f"processed/{processed_run.scan_run_id}/results.json"
+        return f"processed/{scan_run_id}/results.json"
+
+    def _validate_artifact_identity(
+        self, scan_run_id: str, target_set_id: str
+    ) -> str:
+        scan_run_id = _validate_run_id(scan_run_id)
+        request = self.load_request(scan_run_id)
+        if request.target_set_id != target_set_id:
+            raise ValueError("Artifact target identity does not match its run request.")
+        return scan_run_id
+
+    def _contained_artifact_path(
+        self, artifact_type: str, scan_run_id: str, name: str
+    ) -> Path:
+        root = self.data_root.resolve()
+        path = (root / artifact_type / scan_run_id / name).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError as error:
+            raise ValueError("Artifact path escapes the data root.") from error
+        return path
 
     def _run_dir(self, scan_run_id: str) -> Path:
         return self.runs_dir / _validate_run_id(scan_run_id)

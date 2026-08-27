@@ -51,6 +51,8 @@ MVP에서는 스캐너와 OpenAI 처리를 `main.py`가 순서대로 실행한�
 실행 대상은 `docs/data-contracts-v1.md` Contract A를 통과한 manifest만 허용한다.
 
 - 저장소 또는 서버 설정에 등록된 manifest만 선택한다.
+- MVP 등록 원장은 `configs/target-registry.json`이며 `target_set_id`, manifest 상대 경로,
+  허가된 `base_url`을 함께 고정한다. CLI와 대시보드는 이 원장을 공통 사용한다.
 - 사용자가 임의 URL, IP 또는 인증정보를 입력해 실행할 수 없게 한다.
 - `base_url`이 허가 목록에 있는지 실행 직전에 다시 검증한다.
 - 실제 인증정보는 manifest가 아닌 서버 측 `auth_profile` 저장소에서 읽는다.
@@ -113,7 +115,7 @@ CLI는 `run_pipeline`을 foreground에서 호출하고 terminal 상태까지 기
 
 ```bash
 python main.py run \
-  --targets configs/targets.example.json \
+  --target-set-id local-lab-v1 \
   --types XSS SQLI
 ```
 
@@ -274,13 +276,14 @@ XSS·SQLi 스캐너는 동일한 호출 형태와 RawFinding 계약을 사용한
 
 ```python
 from collections.abc import Callable
+from orchestration import ScanContext
 
 ProgressCallback = Callable[[int, int], None]
 
 
 def scan(
     targets: list[TargetCase],
-    scan_run_id: str,
+    context: ScanContext,
     on_progress: ProgressCallback,
 ) -> list[RawFinding]:
     """대상들을 진단하고 모든 시도 결과를 반환한다."""
@@ -289,7 +292,8 @@ def scan(
 ### 11.1 입력
 
 - `targets`: manifest에서 해당 취약점 유형으로 필터링된 허가 대상
-- `scan_run_id`: `main.py`가 생성한 읽기 전용 실행 ID
+- `context`: registry에서 재검증된 `base_url`, 요청 정책, 읽기 전용 `scan_run_id`,
+  해당 run 내부의 응답 증거 저장 경로, 인증 profile resolver만 제공하는 블랙박스 실행 문맥
 - `on_progress`: 현재 단계의 절대 `completed`, `total` 건수를 `main.py`에 전달하는 callback
 
 ### 11.2 출력
@@ -412,6 +416,7 @@ data/runs/.pipeline.lock
 | `RUN_ALREADY_ACTIVE` | true | 다른 실행 진행 중 |
 | `TARGET_VALIDATION_FAILED` | false | manifest 또는 허가 검증 실패 |
 | `RUN_DIRECTORY_FAILED` | true | 실행 디렉터리 생성 실패 |
+| `SCANNER_CONTRACT_FAILED` | false | 스캐너가 요청 대상 결과를 누락했거나 잘못된 결과를 반환 |
 | `RAW_PUBLISH_FAILED` | true | raw 검증·게시 실패 |
 | `PROCESSED_PUBLISH_FAILED` | true | processed 검증·게시 실패 |
 | `PIPELINE_CRASHED` | true | 예상하지 못한 실행 수준 오류 |
@@ -468,7 +473,7 @@ data/runs/.pipeline.lock
 
 스캐너 담당자는 구현 전에 다음 항목을 확인한다.
 
-1. `scan(targets, scan_run_id, on_progress)` 형태로 구현 가능한가?
+1. `scan(targets, context, on_progress)` 형태로 구현 가능한가?
 2. 모든 정상·의심·실패 시도를 공통 RawFinding으로 반환할 수 있는가?
 3. payload profile에 안정적인 `payload_case_id`를 부여할 수 있는가?
 4. 요청·응답 증거를 run별 sidecar로 저장할 수 있는가?

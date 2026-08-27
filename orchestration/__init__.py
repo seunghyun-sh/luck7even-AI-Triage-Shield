@@ -8,7 +8,7 @@ from .models import (
     RunRequest,
     RunStatusDocument,
 )
-from .pipeline import PipelineOrchestrator, TargetValidationError
+from .pipeline import PipelineOrchestrator, ScanContext, TargetValidationError
 from .run_store import PipelineLock, RunAlreadyActiveError, RunStore
 
 __all__ = [
@@ -22,6 +22,7 @@ __all__ = [
     "RunRequest",
     "RunStatusDocument",
     "RunStore",
+    "ScanContext",
     "TargetValidationError",
     "start_run",
 ]

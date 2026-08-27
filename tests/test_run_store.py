@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -212,3 +213,48 @@ def test_pipeline_lock_rejects_duplicate_and_releases_owned_lock(tmp_path: Path)
         assert str(tmp_path) not in str(exc_info.value)
 
     assert not lock_path.exists()
+
+
+def test_dead_owner_lock_marks_run_failed_and_recovers(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "data")
+    status = store.create_run(
+        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+    )
+    lock_path = store.runs_dir / ".pipeline.lock"
+    lock_path.write_text(
+        json.dumps(
+            {
+                "pid": 2_147_483_647,
+                "scan_run_id": status.scan_run_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+    )
+
+    assert not store.pipeline_lock_active()
+    recovered = store.load_status(status.scan_run_id)
+    assert recovered.status is ExecutionStatus.FAILED
+    assert recovered.error is not None
+    assert recovered.error.code == "STALE_RUN_RECOVERED"
+    assert not lock_path.exists()
+
+
+def test_live_owner_lock_is_never_recovered(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "data")
+    status = store.create_run(
+        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+    )
+    lock_path = store.runs_dir / ".pipeline.lock"
+    lock_path.write_text(
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "scan_run_id": status.scan_run_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+    )
+
+    assert store.pipeline_lock_active()
+    assert store.load_status(status.scan_run_id).status is ExecutionStatus.QUEUED
+    assert lock_path.exists()

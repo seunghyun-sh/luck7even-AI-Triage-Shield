@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.0",
+  "targets": [
+    {
+      "target_set_id": "local-lab-v1",
+      "manifest": "targets.example.json",
+      "allowed_base_url": "http://127.0.0.1:5000"
+    }
+  ]
+}

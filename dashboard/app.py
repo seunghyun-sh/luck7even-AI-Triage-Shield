@@ -28,10 +28,13 @@ from dashboard.metrics import (
     build_type_counts,
 )
 from dashboard.report_builder import build_excel_report
-from orchestration.data_loader import ContractLoadError, load_target_manifest
 from orchestration.launcher import RunLaunchError, start_run
 from orchestration.preflight import Readiness, run_preflight
 from orchestration.run_store import RunStore
+from orchestration.target_registry import (
+    TargetRegistryError,
+    list_registered_targets,
+)
 
 SAMPLE_PROCESSED = PROJECT_ROOT / "configs" / "triaged-results.example.json"
 SAMPLE_GROUND_TRUTH = PROJECT_ROOT / "configs" / "ground-truth.example.json"
@@ -509,13 +512,13 @@ def _load_inputs() -> tuple[Any | None, Any | None]:
 
 
 def _available_target_manifests() -> list[tuple[Path, Any]]:
-    manifests: list[tuple[Path, Any]] = []
-    for path in sorted((PROJECT_ROOT / "configs").glob("targets*.json")):
-        try:
-            manifests.append((path, load_target_manifest(path)))
-        except (ContractLoadError, OSError, TypeError, ValueError):
-            continue
-    return manifests
+    try:
+        return [
+            (target.manifest_path, target.manifest)
+            for target in list_registered_targets()
+        ]
+    except TargetRegistryError:
+        return []
 
 
 def _safe_processed_path(status: Any) -> Path | None:
@@ -726,7 +729,7 @@ def _render_execution_tab() -> None:
             else:
                 try:
                     st.session_state["scan_run_id"] = start_run(
-                        selected_path.relative_to(PROJECT_ROOT), selected_types
+                        manifest_names[selected_path], selected_types
                     )
                 except RunLaunchError as error:
                     st.error(str(error))

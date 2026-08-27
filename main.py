@@ -6,7 +6,6 @@ import argparse
 import importlib
 import sys
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from orchestration.pipeline import PipelineOrchestrator, TargetValidationError
@@ -23,7 +22,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
     run = subcommands.add_parser("run", help="Run a validated diagnostic pipeline.")
-    run.add_argument("--targets", type=Path, required=True, help="Target manifest JSON.")
+    run.add_argument(
+        "--target-set-id", required=True, help="Registered target set identifier."
+    )
     run.add_argument(
         "--types",
         nargs="+",
@@ -37,7 +38,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def _component_callable(module_name: str, attribute: str) -> Callable[..., Any]:
     try:
         component = getattr(importlib.import_module(module_name), attribute)
-    except (ImportError, AttributeError) as error:
+    except Exception as error:
         raise ComponentUnavailableError(
             "A required pipeline component is unavailable."
         ) from error
@@ -80,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         final_status = orchestrator.run(
-            args.targets,
+            args.target_set_id,
             args.types,
             on_run_created=print,
         )

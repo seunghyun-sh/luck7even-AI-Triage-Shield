@@ -124,13 +124,14 @@ pip install -r requirements.txt
 flask --app lab_app.app run --debug
 ```
 
-### 4. 통합 진단 실행 예정 인터페이스
+### 4. 등록 대상 통합 진단 실행
 
 ```bash
-python main.py --targets configs/targets.example.json
+python main.py run --target-set-id local-lab-v1 --types XSS SQLI
 ```
 
-현재 `main.py`는 대상 설정 경로만 확인하는 골격이며 스캐너·AI 처리·결과 저장은 아직 실행하지 않습니다.
+허가 대상은 `configs/target-registry.json`에 등록하며, 실행 시 manifest ID와
+`base_url` allowlist를 다시 검증한 뒤 스캐너·AI 처리·결과 저장 파이프라인을 실행합니다.
 
 ### 5. 대시보드 실행
 

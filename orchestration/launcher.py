@@ -52,7 +52,7 @@ def _read_first_line(stream: TextIO | None, output: queue.Queue[str]) -> None:
     output.put("" if stream is None else stream.readline())
 
 
-def start_run(targets_path: Path, vuln_types: list[str]) -> str:
+def start_run(target_set_id: str, vuln_types: list[str]) -> str:
     """Launch ``main.py run`` and return its contract-issued run identifier."""
 
     command = [
@@ -60,8 +60,8 @@ def start_run(targets_path: Path, vuln_types: list[str]) -> str:
         "-u",
         "main.py",
         "run",
-        "--targets",
-        str(targets_path),
+        "--target-set-id",
+        target_set_id,
         "--types",
         *vuln_types,
     ]

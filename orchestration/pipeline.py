@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import TypeAlias
 
 from pydantic import ValidationError
@@ -13,12 +15,12 @@ from analysis.models import (
     ProcessedRun,
     RawFinding,
     RawRun,
+    RequestPolicy,
     RunStatus,
     TargetCase,
     TargetManifest,
 )
 
-from .data_loader import ContractLoadError, DataSource, load_target_manifest
 from .models import (
     ExecutionStage,
     ExecutionStatus,
@@ -28,11 +30,33 @@ from .models import (
     RunStatusDocument,
 )
 from .run_store import RunAlreadyActiveError, RunStore
+from .target_registry import TargetRegistryError, load_registered_target
 
 ProgressCallback: TypeAlias = Callable[[int, int], None]
-Scanner: TypeAlias = Callable[[list[TargetCase], str, ProgressCallback], list[RawFinding]]
+AuthProfileResolver: TypeAlias = Callable[[str], Mapping[str, str]]
+ManifestResolver: TypeAlias = Callable[[str], TargetManifest]
+
+
+@dataclass(frozen=True)
+class ScanContext:
+    """Authorized capabilities exposed to a black-box scanner adapter."""
+
+    scan_run_id: str
+    base_url: str
+    request_policy: RequestPolicy
+    responses_dir: Path
+    resolve_auth_profile: AuthProfileResolver
+
+
+Scanner: TypeAlias = Callable[
+    [list[TargetCase], ScanContext, ProgressCallback], list[RawFinding]
+]
 Triage: TypeAlias = Callable[[RawRun], ProcessedRun]
 RunCreatedCallback: TypeAlias = Callable[[str], None]
+
+
+def _unconfigured_auth_profile(profile_id: str) -> Mapping[str, str]:
+    raise KeyError(f"Auth profile is not configured: {profile_id}")
 
 
 class TargetValidationError(ValueError):
@@ -57,22 +81,26 @@ class PipelineOrchestrator:
         xss_scanner: Scanner,
         sqli_scanner: Scanner,
         triage: Triage,
+        manifest_resolver: ManifestResolver = load_registered_target,
+        auth_profile_resolver: AuthProfileResolver = _unconfigured_auth_profile,
     ) -> None:
         self._store = store
         self._xss_scanner = xss_scanner
         self._sqli_scanner = sqli_scanner
         self._triage = triage
+        self._manifest_resolver = manifest_resolver
+        self._auth_profile_resolver = auth_profile_resolver
 
     def run(
         self,
-        targets: DataSource | TargetManifest,
+        target_set_id: str,
         vuln_types: list[str],
         *,
         on_run_created: RunCreatedCallback | None = None,
     ) -> RunStatusDocument:
         """Execute a complete pipeline invocation and return its terminal status."""
 
-        manifest = self._load_manifest(targets)
+        manifest = self._load_manifest(target_set_id)
         try:
             request = RunRequest(
                 target_set_id=manifest.target_set_id, vuln_types=vuln_types
@@ -88,9 +116,9 @@ class PipelineOrchestrator:
         status: RunStatusDocument | None = None
         try:
             status = self._store.create_run(request)
-            if on_run_created is not None:
-                on_run_created(status.scan_run_id)
             with self._store.pipeline_lock(status.scan_run_id):
+                if on_run_created is not None:
+                    on_run_created(status.scan_run_id)
                 return self._run_locked(status, manifest)
         except RunAlreadyActiveError:
             if status is None:
@@ -121,14 +149,15 @@ class PipelineOrchestrator:
                 retryable=True,
             )
 
-    @staticmethod
-    def _load_manifest(targets: DataSource | TargetManifest) -> TargetManifest:
+    def _load_manifest(self, target_set_id: str) -> TargetManifest:
         try:
-            if isinstance(targets, TargetManifest):
-                return TargetManifest.model_validate(targets.model_dump(mode="json"))
-            return load_target_manifest(targets)
+            manifest = self._manifest_resolver(target_set_id)
+            validated = TargetManifest.model_validate(manifest.model_dump(mode="json"))
+            if validated.target_set_id != target_set_id:
+                raise ValueError("Registered manifest identity does not match request.")
+            return validated
         except (
-            ContractLoadError,
+            TargetRegistryError,
             ValidationError,
             OSError,
             TypeError,
@@ -158,16 +187,31 @@ class PipelineOrchestrator:
             target_cases = [
                 target for target in manifest.targets if target.vuln_type.value == vuln_type
             ]
+            context = ScanContext(
+                scan_run_id=status.scan_run_id,
+                base_url=manifest.base_url,
+                request_policy=manifest.request_policy,
+                responses_dir=self._store.responses_dir(status.scan_run_id),
+                resolve_auth_profile=self._auth_profile_resolver,
+            )
             results = scanner(
                 target_cases,
-                status.scan_run_id,
+                context,
                 self._progress_callback(status.scan_run_id, stage),
             )
-            if not isinstance(results, list):
-                raise TypeError("Scanner did not return a finding list.")
-            validated = [RawFinding.model_validate(item) for item in results]
-            if any(finding.vuln_type.value != vuln_type for finding in validated):
-                raise ValueError("Scanner returned an unexpected finding type.")
+            try:
+                if not isinstance(results, list):
+                    raise TypeError("Scanner did not return a finding list.")
+                validated = [RawFinding.model_validate(item) for item in results]
+                if any(finding.vuln_type.value != vuln_type for finding in validated):
+                    raise ValueError("Scanner returned an unexpected finding type.")
+                self._validate_scanner_coverage(target_cases, validated)
+            except (TypeError, ValueError, ValidationError) as error:
+                raise _PipelineFailure(
+                    "SCANNER_CONTRACT_FAILED",
+                    "A scanner returned incomplete or invalid results.",
+                    retryable=False,
+                ) from error
             findings.extend(validated)
             status = self._store.load_status(status.scan_run_id)
 
@@ -236,6 +280,25 @@ class PipelineOrchestrator:
             raw_result_path=raw_path,
             processed_result_path=processed_path,
         )
+
+    @staticmethod
+    def _validate_scanner_coverage(
+        targets: list[TargetCase], findings: list[RawFinding]
+    ) -> None:
+        target_ids = {target.case_id for target in targets}
+        covered: set[str] = set()
+        for finding in findings:
+            matches = {
+                target_id
+                for target_id in target_ids
+                if finding.case_id == target_id
+                or finding.case_id.startswith(f"{target_id}::")
+            }
+            if len(matches) != 1:
+                raise ValueError("Scanner returned a finding for an unknown target case.")
+            covered.update(matches)
+        if covered != target_ids:
+            raise ValueError("Scanner omitted one or more requested target cases.")
 
     @staticmethod
     def _raw_status(findings: list[RawFinding]) -> RunStatus:
