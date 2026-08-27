@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -212,10 +211,11 @@ def test_pipeline_lock_rejects_duplicate_and_releases_owned_lock(tmp_path: Path)
         assert exc_info.value.scan_run_id == run_id
         assert str(tmp_path) not in str(exc_info.value)
 
-    assert not lock_path.exists()
+    assert lock_path.exists()
+    assert not store.pipeline_lock_active()
 
 
-def test_dead_owner_lock_marks_run_failed_and_recovers(tmp_path: Path) -> None:
+def test_stale_lock_metadata_is_not_an_active_lock_or_mutated(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "data")
     status = store.create_run(
         RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
@@ -230,31 +230,77 @@ def test_dead_owner_lock_marks_run_failed_and_recovers(tmp_path: Path) -> None:
             }
         )
     )
+    original = lock_path.read_bytes()
 
     assert not store.pipeline_lock_active()
-    recovered = store.load_status(status.scan_run_id)
-    assert recovered.status is ExecutionStatus.FAILED
-    assert recovered.error is not None
-    assert recovered.error.code == "STALE_RUN_RECOVERED"
-    assert not lock_path.exists()
+    assert store.load_status(status.scan_run_id) == status
+    assert lock_path.read_bytes() == original
 
 
-def test_live_owner_lock_is_never_recovered(tmp_path: Path) -> None:
+def test_active_run_status_requires_live_lock_and_nonterminal_owner(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "data")
+    status = store.create_run(
+        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+    )
+
+    assert store.active_run_status() is None
+    with store.pipeline_lock(status.scan_run_id):
+        assert store.active_run_status() == status
+
+
+def test_active_run_status_rejects_malformed_or_terminal_owner(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "data")
     status = store.create_run(
         RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
     )
     lock_path = store.runs_dir / ".pipeline.lock"
-    lock_path.write_text(
-        json.dumps(
-            {
-                "pid": os.getpid(),
-                "scan_run_id": status.scan_run_id,
-                "created_at": datetime.now(timezone.utc).isoformat(),
+
+    with store.pipeline_lock(status.scan_run_id):
+        lock_path.write_text("{malformed", encoding="utf-8")
+        assert store.pipeline_lock_active()
+        assert store.active_run_status() is None
+
+    with store.pipeline_lock(status.scan_run_id):
+        terminal_time = status.updated_at + timedelta(seconds=1)
+        failed = status.model_copy(
+            update={
+                "status": ExecutionStatus.FAILED,
+                "stage": None,
+                "updated_at": terminal_time,
+                "completed_at": terminal_time,
+                "error": RunError(
+                    code="PIPELINE_CRASHED",
+                    message="Pipeline failed.",
+                    retryable=True,
+                ),
             }
         )
+        store.save_status(failed)
+        assert store.active_run_status() is None
+
+
+def test_reconcile_orphaned_runs_fails_only_lockless_nonterminal_runs(
+    tmp_path: Path,
+) -> None:
+    store = RunStore(tmp_path / "data")
+    orphan = store.create_run(
+        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+    )
+    protected = store.create_run(
+        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
     )
 
-    assert store.pipeline_lock_active()
-    assert store.load_status(status.scan_run_id).status is ExecutionStatus.QUEUED
-    assert lock_path.exists()
+    with store.pipeline_lock(protected.scan_run_id):
+        assert store.reconcile_orphaned_runs() == []
+        assert store.load_status(orphan.scan_run_id) == orphan
+
+    reconciled = store.reconcile_orphaned_runs()
+
+    assert {status.scan_run_id for status in reconciled} == {
+        orphan.scan_run_id,
+        protected.scan_run_id,
+    }
+    for recovered in reconciled:
+        assert recovered.status is ExecutionStatus.FAILED
+        assert recovered.error is not None
+        assert recovered.error.code == "ORPHANED_RUN"

@@ -1,7 +1,9 @@
-"""Atomic persistence and global pipeline locking for execution runs."""
+"""Atomic persistence and advisory global pipeline locking for execution runs."""
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import json
 import os
 import secrets
@@ -36,13 +38,13 @@ class RunAlreadyActiveError(RuntimeError):
 
 
 class PipelineLock:
-    """An atomic-create lock owned by one pipeline invocation."""
+    """An advisory lock whose descriptor remains open for its owner lifetime."""
 
     def __init__(self, data_root: Path | str, scan_run_id: str) -> None:
         self._data_root = Path(data_root)
         self._scan_run_id = _validate_run_id(scan_run_id)
         self._path = self._data_root / "runs" / ".pipeline.lock"
-        self._contents: bytes | None = None
+        self._descriptor: int | None = None
 
     def __enter__(self) -> Self:
         self.acquire()
@@ -53,10 +55,18 @@ class PipelineLock:
         return False
 
     def acquire(self) -> None:
-        if self._contents is not None:
+        if self._descriptor is not None:
             raise RuntimeError("Pipeline lock is already held by this instance.")
 
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(self._path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            os.close(descriptor)
+            if exc.errno in {errno.EACCES, errno.EAGAIN}:
+                raise RunAlreadyActiveError(self._read_existing_lock()) from exc
+            raise
         record = {
             "pid": os.getpid(),
             "scan_run_id": self._scan_run_id,
@@ -66,44 +76,61 @@ class PipelineLock:
             json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
         ).encode("utf-8")
         try:
-            descriptor = os.open(
-                self._path,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                0o600,
-            )
-        except FileExistsError as exc:
-            raise RunAlreadyActiveError(self._read_existing_lock()) from exc
-
-        try:
-            with os.fdopen(descriptor, "wb") as lock_file:
-                lock_file.write(contents)
-                lock_file.flush()
-                os.fsync(lock_file.fileno())
+            os.ftruncate(descriptor, 0)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            remaining = memoryview(contents)
+            while remaining:
+                written = os.write(descriptor, remaining)
+                if written == 0:
+                    raise OSError("Unable to write pipeline lock metadata.")
+                remaining = remaining[written:]
+            os.fsync(descriptor)
         except BaseException:
-            try:
-                self._path.unlink()
-            except FileNotFoundError:
-                pass
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
             raise
-        self._contents = contents
+        self._descriptor = descriptor
 
     def release(self) -> None:
-        if self._contents is None:
+        if self._descriptor is None:
             return
         try:
-            if self._path.read_bytes() == self._contents:
-                self._path.unlink()
-        except FileNotFoundError:
-            pass
+            fcntl.flock(self._descriptor, fcntl.LOCK_UN)
         finally:
-            self._contents = None
+            os.close(self._descriptor)
+            self._descriptor = None
 
     def _read_existing_lock(self) -> dict[str, Any] | None:
         try:
             loaded = json.loads(self._path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             return None
-        return loaded if isinstance(loaded, dict) else None
+        if not isinstance(loaded, dict):
+            return None
+        pid = loaded.get("pid")
+        scan_run_id = loaded.get("scan_run_id")
+        created_at = loaded.get("created_at")
+        if (
+            not isinstance(pid, int)
+            or isinstance(pid, bool)
+            or pid <= 0
+            or not isinstance(created_at, str)
+        ):
+            return None
+        try:
+            created_at_value = datetime.fromisoformat(created_at)
+            if (
+                created_at_value.tzinfo is None
+                or created_at_value.utcoffset() is None
+            ):
+                return None
+            return {
+                "pid": pid,
+                "scan_run_id": _validate_run_id(scan_run_id),
+                "created_at": created_at_value.isoformat(),
+            }
+        except (TypeError, ValueError):
+            return None
 
 
 class RunStore:
@@ -211,48 +238,45 @@ class RunStore:
         )
 
     def pipeline_lock(self, scan_run_id: str) -> PipelineLock:
-        self.recover_stale_pipeline_lock()
         return PipelineLock(self.data_root, scan_run_id)
 
     def pipeline_lock_active(self) -> bool:
-        """Return whether a live owner still holds the global pipeline lock."""
+        """Return whether an advisory lock is currently held without mutating state."""
 
-        self.recover_stale_pipeline_lock()
-        return (self.runs_dir / ".pipeline.lock").exists()
+        return self._pipeline_lock_is_held()
 
-    def recover_stale_pipeline_lock(self) -> bool:
-        """Recover a lock only after verifying both owner death and run state."""
+    def active_run_status(self) -> RunStatusDocument | None:
+        """Return the nonterminal status of the current live lock owner, if valid."""
 
-        lock_path = self.runs_dir / ".pipeline.lock"
+        if not self._pipeline_lock_is_held():
+            return None
+        owner = self._read_pipeline_lock_owner()
+        if owner is None:
+            return None
         try:
-            original = lock_path.read_bytes()
-            payload = json.loads(original)
-        except FileNotFoundError:
-            return False
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-            return False
-        if not isinstance(payload, dict):
-            return False
-        pid = payload.get("pid")
-        scan_run_id = payload.get("scan_run_id")
-        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-            return False
-        try:
-            scan_run_id = _validate_run_id(scan_run_id)
-        except (TypeError, ValueError):
-            return False
-        if self._pid_is_alive(pid):
-            return False
-        try:
-            status = self.load_status(scan_run_id)
-        except (FileNotFoundError, ValueError):
-            return False
-        terminal = {
-            ExecutionStatus.COMPLETED,
-            ExecutionStatus.PARTIAL,
-            ExecutionStatus.FAILED,
-        }
-        if status.status not in terminal:
+            status = self.load_status(owner["scan_run_id"])
+        except (OSError, ValueError):
+            return None
+        if status.status not in {ExecutionStatus.QUEUED, ExecutionStatus.RUNNING}:
+            return None
+        return status
+
+    def reconcile_orphaned_runs(self) -> list[RunStatusDocument]:
+        """Fail nonterminal runs only when no pipeline owner holds the lock."""
+
+        if self._pipeline_lock_is_held() or not self.runs_dir.is_dir():
+            return []
+        reconciled: list[RunStatusDocument] = []
+        for run_dir in self.runs_dir.iterdir():
+            if not run_dir.is_dir():
+                continue
+            try:
+                scan_run_id = _validate_run_id(run_dir.name)
+                status = self.load_status(scan_run_id)
+            except (OSError, ValueError):
+                continue
+            if status.status not in {ExecutionStatus.QUEUED, ExecutionStatus.RUNNING}:
+                continue
             now = max(datetime.now().astimezone(), status.updated_at)
             failed = status.model_copy(
                 update={
@@ -262,32 +286,67 @@ class RunStore:
                     "completed_at": now,
                     "processed_result_path": None,
                     "error": RunError(
-                        code="STALE_RUN_RECOVERED",
-                        message="The previous pipeline process is no longer running.",
+                        code="ORPHANED_RUN",
+                        message="The run has no active pipeline owner.",
                         retryable=True,
                     ),
                 }
             )
             self.save_status(failed)
-        try:
-            if lock_path.read_bytes() != original:
-                return False
-            lock_path.unlink()
-        except FileNotFoundError:
-            return True
-        return True
+            reconciled.append(failed)
+        return reconciled
 
-    @staticmethod
-    def _pid_is_alive(pid: int) -> bool:
+    def _pipeline_lock_is_held(self) -> bool:
+        lock_path = self.runs_dir / ".pipeline.lock"
         try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
+            descriptor = os.open(lock_path, os.O_RDWR)
+        except FileNotFoundError:
             return False
-        except PermissionError:
-            return True
-        except OSError:
-            return True
-        return True
+        try:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                if exc.errno in {errno.EACCES, errno.EAGAIN}:
+                    return True
+                raise
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            return False
+        finally:
+            os.close(descriptor)
+
+    def _read_pipeline_lock_owner(self) -> dict[str, str | int] | None:
+        try:
+            payload = json.loads(
+                (self.runs_dir / ".pipeline.lock").read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        pid = payload.get("pid")
+        scan_run_id = payload.get("scan_run_id")
+        created_at = payload.get("created_at")
+        if (
+            not isinstance(pid, int)
+            or isinstance(pid, bool)
+            or pid <= 0
+            or not isinstance(created_at, str)
+        ):
+            return None
+        try:
+            created_at_value = datetime.fromisoformat(created_at)
+            if (
+                created_at_value.tzinfo is None
+                or created_at_value.utcoffset() is None
+            ):
+                return None
+            return {
+                "pid": pid,
+                "scan_run_id": _validate_run_id(scan_run_id),
+                "created_at": created_at_value.isoformat(),
+            }
+        except (TypeError, ValueError):
+            return None
 
     def responses_dir(self, scan_run_id: str) -> Path:
         """Return the contained evidence directory for an existing run."""

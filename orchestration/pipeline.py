@@ -115,6 +115,7 @@ class PipelineOrchestrator:
 
         status: RunStatusDocument | None = None
         try:
+            self._store.reconcile_orphaned_runs()
             status = self._store.create_run(request)
             with self._store.pipeline_lock(status.scan_run_id):
                 if on_run_created is not None:

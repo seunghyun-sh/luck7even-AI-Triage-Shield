@@ -370,7 +370,7 @@ def test_scanner_crash_records_safe_failure_and_releases_lock(tmp_path: Path) ->
     assert result.status is ExecutionStatus.FAILED
     assert result.error is not None
     assert result.error.message == "Pipeline execution failed."
-    assert not (tmp_path / "data" / "runs" / ".pipeline.lock").exists()
+    assert not RunStore(tmp_path / "data").pipeline_lock_active()
 
 
 def test_lineage_mismatch_does_not_publish_processed(tmp_path: Path) -> None:
@@ -439,7 +439,7 @@ def test_invalid_progress_records_failure_and_releases_lock(tmp_path: Path) -> N
         tmp_path, invalid_progress, lambda targets, context, progress: []
     ).run("local-lab-v1", ["XSS"])
     assert result.status is ExecutionStatus.FAILED
-    assert not (tmp_path / "data" / "runs" / ".pipeline.lock").exists()
+    assert not RunStore(tmp_path / "data").pipeline_lock_active()
 
 
 def test_component_import_exception_is_normalized_without_details(monkeypatch) -> None:
