@@ -73,6 +73,24 @@ def _baseline_value(target: TargetCase) -> str:
     return "" if value is None else str(value)
 
 
+def _build_fields(target: TargetCase, attack_value: str) -> dict:
+    fields = dict(target.input.parameters)
+    fields[target.input.attack_parameter] = attack_value
+    return fields
+
+
+def _send(client, method: str, url: str, location: str, fields: dict,
+          timeout_seconds: int, follow_redirects: bool):
+    kwargs = {"timeout": timeout_seconds, "allow_redirects": follow_redirects}
+    if location == "json":
+        kwargs["json"] = fields
+    elif location == "form":
+        kwargs["data"] = fields
+    else:
+        kwargs["params"] = fields
+    return client.post(url, **kwargs) if method == "POST" else client.get(url, **kwargs)
+
+
 def load_payload_profile(profile_id: str, payloads_dir: Path) -> list[dict]:
     """Load a fixed, version-controlled payload list by its stable profile id."""
     path = (payloads_dir / f"{profile_id}.json").resolve()
@@ -128,16 +146,16 @@ def evaluate_single_payload(
 
     try:
         baseline_started = time.monotonic()
-        baseline_resp = client.get(
-            url, params={target.input.attack_parameter: baseline_value},
-            timeout=timeout_seconds, allow_redirects=follow_redirects,
+        baseline_resp = _send(
+            client, target.method, url, target.input.location,
+            _build_fields(target, baseline_value), timeout_seconds, follow_redirects,
         )
         baseline_elapsed_ms = int((time.monotonic() - baseline_started) * 1000)
 
         started = time.monotonic()
-        resp = client.get(
-            url, params={target.input.attack_parameter: payload_value},
-            timeout=timeout_seconds, allow_redirects=follow_redirects,
+        resp = _send(
+            client, target.method, url, target.input.location,
+            _build_fields(target, payload_value), timeout_seconds, follow_redirects,
         )
         elapsed_ms = int((time.monotonic() - started) * 1000)
     except requests.exceptions.Timeout:
@@ -201,13 +219,13 @@ def evaluate_boolean_pair_payload(
 
     try:
         started = time.monotonic()
-        true_resp = client.get(
-            url, params={target.input.attack_parameter: true_value},
-            timeout=timeout_seconds, allow_redirects=follow_redirects,
+        true_resp = _send(
+            client, target.method, url, target.input.location,
+            _build_fields(target, true_value), timeout_seconds, follow_redirects,
         )
-        false_resp = client.get(
-            url, params={target.input.attack_parameter: false_value},
-            timeout=timeout_seconds, allow_redirects=follow_redirects,
+        false_resp = _send(
+            client, target.method, url, target.input.location,
+            _build_fields(target, false_value), timeout_seconds, follow_redirects,
         )
         elapsed_ms = int((time.monotonic() - started) * 1000)
     except requests.exceptions.Timeout:
