@@ -1,0 +1,17 @@
+<article class="product-card">
+  <a class="product-visual accent-{{ product['accent'] }}" href="{{ url_for('storefront.product_detail', product_id=product['id']) }}">
+    {% if product['badge'] %}<span class="product-badge">{{ product['badge'] }}</span>{% endif %}
+    <span class="product-symbol" aria-hidden="true">{{ product['name'][0] }}</span>
+    <span class="visual-caption">LUMI SELECT</span>
+  </a>
+  <div class="product-info">
+    <span class="category-label">{{ product['category'] }}</span>
+    <a class="product-name" href="{{ url_for('storefront.product_detail', product_id=product['id']) }}">{{ product['name'] }}</a>
+    <div class="price-row">
+      <strong>{{ "{:,}".format(product['price']) }}원</strong>
+      {% if product['original_price'] %}<del>{{ "{:,}".format(product['original_price']) }}원</del>{% endif %}
+    </div>
+    <div class="rating">★ {{ product['rating'] }} <span>({{ product['review_count'] }})</span></div>
+  </div>
+</article>
+

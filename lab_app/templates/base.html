@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="취향 있는 일상을 위한 라이프스타일 셀렉트숍">
+    <title>{% block title %}Lumi Market{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/store.css') }}">
+    <script defer src="{{ url_for('static', filename='js/store.js') }}"></script>
+  </head>
+  <body>
+    <div class="announcement">신규 회원 첫 구매 10% 할인 · 5만원 이상 무료배송</div>
+    <header class="site-header">
+      <div class="header-inner">
+        <button class="menu-button" type="button" aria-label="메뉴 열기" data-menu-button>☰</button>
+        <a class="brand" href="{{ url_for('storefront.home') }}" aria-label="Lumi Market 홈">
+          <span class="brand-mark">L</span><span>LUMI</span>
+        </a>
+        <nav class="primary-nav" data-menu>
+          <a href="{{ url_for('storefront.products') }}">전체 상품</a>
+          <a href="{{ url_for('storefront.products', category='디지털') }}">디지털</a>
+          <a href="{{ url_for('storefront.products', category='리빙') }}">리빙</a>
+          <a href="{{ url_for('storefront.products', category='패션') }}">패션</a>
+          <a href="{{ url_for('community.reviews') }}">구매후기</a>
+        </nav>
+        <div class="header-actions">
+          <a href="{{ url_for('storefront.search') }}" aria-label="검색">검색</a>
+          <a href="{{ url_for('auth.profile') }}" aria-label="마이페이지">MY</a>
+          <a href="{{ url_for('storefront.cart') }}" aria-label="장바구니">CART</a>
+        </div>
+      </div>
+    </header>
+
+    <main>{% block content %}{% endblock %}</main>
+
+    <footer class="site-footer">
+      <div class="footer-grid">
+        <div>
+          <a class="brand footer-brand" href="{{ url_for('storefront.home') }}">
+            <span class="brand-mark">L</span><span>LUMI</span>
+          </a>
+          <p>작은 선택이 더 나은 일상을 만든다고 믿습니다.</p>
+        </div>
+        <div><strong>SHOP</strong><a href="{{ url_for('storefront.products') }}">전체 상품</a><a href="{{ url_for('community.reviews') }}">구매후기</a></div>
+        <div><strong>HELP</strong><a href="{{ url_for('community.support') }}">고객센터</a><a href="{{ url_for('community.support') }}#notice">공지사항</a></div>
+        <div><strong>ACCOUNT</strong><a href="{{ url_for('auth.login') }}">로그인</a><a href="{{ url_for('auth.register') }}">회원가입</a></div>
+      </div>
+      <div class="footer-bottom">© <span data-current-year>2026</span> Lumi Market. All rights reserved.</div>
+    </footer>
+  </body>
+</html>
+

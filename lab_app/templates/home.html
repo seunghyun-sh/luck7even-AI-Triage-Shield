@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Lumi Market · 일상을 밝히는 선택{% endblock %}
+{% block content %}
+  <section class="hero">
+    <div class="hero-copy">
+      <p class="eyebrow">NEW SEASON · 2026</p>
+      <h1>평범한 하루를<br><em>조금 더 특별하게</em></h1>
+      <p>쓰임과 아름다움을 함께 생각한 물건을 골라 소개합니다. 오래 곁에 둘 당신의 새로운 취향을 만나보세요.</p>
+      <div class="hero-actions">
+        <a class="button primary" href="{{ url_for('storefront.products') }}">컬렉션 둘러보기</a>
+        <a class="text-link" href="{{ url_for('community.reviews') }}">고객 이야기 보기 →</a>
+      </div>
+    </div>
+    <div class="hero-art" aria-label="Lumi Market 시즌 컬렉션">
+      <div class="orb orb-one"></div><div class="orb orb-two"></div>
+      <div class="hero-product"><span>L</span><small>EVERYDAY OBJECTS</small></div>
+      <p>CURATED<br>FOR YOUR DAY</p>
+    </div>
+  </section>
+
+  <section class="service-strip">
+    <div><strong>무료배송</strong><span>5만원 이상 구매 시</span></div>
+    <div><strong>빠른출고</strong><span>평일 오후 2시 이전</span></div>
+    <div><strong>안심교환</strong><span>수령 후 7일 이내</span></div>
+    <div><strong>고객지원</strong><span>평일 10:00–17:00</span></div>
+  </section>
+
+  <section class="section container">
+    <div class="section-heading">
+      <div><p class="eyebrow dark">LUMI BEST</p><h2>지금 가장 사랑받는 상품</h2></div>
+      <a class="text-link" href="{{ url_for('storefront.products') }}">전체 상품 보기 →</a>
+    </div>
+    <div class="product-grid">
+      {% for product in featured %}{% include "_product_card.html" %}{% endfor %}
+    </div>
+  </section>
+
+  <section class="category-editorial">
+    <a href="{{ url_for('storefront.products', category='디지털') }}" class="editorial-card digital"><span>SMART LIVING</span><h3>일상을 가볍게<br>연결하는 기술</h3><em>디지털 컬렉션 →</em></a>
+    <a href="{{ url_for('storefront.products', category='리빙') }}" class="editorial-card living"><span>CALM HOME</span><h3>머무는 공간에<br>더하는 온기</h3><em>리빙 컬렉션 →</em></a>
+  </section>
+
+  <section class="section container stories">
+    <div class="section-heading"><div><p class="eyebrow dark">REAL STORIES</p><h2>고객이 전하는 Lumi</h2></div><a class="text-link" href="{{ url_for('community.reviews') }}">후기 더보기 →</a></div>
+    <div class="story-grid">
+      {% for review in recent_reviews %}
+        <article class="story-card"><div class="stars">{{ "★" * review['rating'] }}{{ "☆" * (5 - review['rating']) }}</div><h3>{{ review['title'] }}</h3><p>{{ review['content'] }}</p><span>{{ review['author'] }} 고객님</span></article>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="newsletter">
+    <p class="eyebrow">LUMI LETTER</p><h2>새로운 취향을 가장 먼저 만나보세요</h2><p>매주 한 번, 새로 입고된 상품과 일상을 위한 영감을 전해드립니다.</p>
+    <form class="newsletter-form" onsubmit="return false"><input type="email" placeholder="이메일 주소"><button type="submit">구독하기</button></form>
+  </section>
+{% endblock %}
+
