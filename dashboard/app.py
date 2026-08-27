@@ -104,6 +104,24 @@ def _display_enum(category: str, value: Any) -> str:
     return DISPLAY_LABELS.get(category, {}).get(value, str(value))
 
 
+def _display_ai_verdict(value: Any) -> str:
+    """Display a mixed AI verdict without changing its canonical chart value."""
+
+    label = DISPLAY_LABELS["ai_label"].get(value)
+    if label is not None:
+        return label
+    return _display_enum("ai_status", value)
+
+
+def _display_rule_verdict(value: Any) -> str:
+    """Display a mixed rule verdict without changing its canonical chart value."""
+
+    label = DISPLAY_LABELS["rule_label"].get(value)
+    if label is not None:
+        return label
+    return _display_enum("scan_status", value)
+
+
 def _format_metric(value: Any) -> str:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return "N/A"
@@ -291,7 +309,7 @@ def _render_charts(df: pd.DataFrame) -> None:
             displayed_counts = verdict_counts.assign(
                 **{
                     label: verdict_counts[label].map(
-                        lambda value: _display_enum("ai_label", value)
+                        _display_ai_verdict
                     )
                 }
             )
@@ -312,12 +330,8 @@ def _render_charts(df: pd.DataFrame) -> None:
             st.info("비교할 규칙·AI 판정이 없습니다.")
         else:
             displayed_comparison = comparison.assign(
-                rule_label=comparison["rule_label"].map(
-                    lambda value: _display_enum("rule_label", value)
-                ),
-                ai_label=comparison["ai_label"].map(
-                    lambda value: _display_enum("ai_label", value)
-                ),
+                rule_label=comparison["rule_label"].map(_display_rule_verdict),
+                ai_label=comparison["ai_label"].map(_display_ai_verdict),
             )
             st.plotly_chart(
                 _dark_figure(
@@ -567,6 +581,12 @@ def _report_frame(
     return report.drop(columns="_merge")
 
 
+def _load_discovered_processed_run(path: Path) -> Any:
+    """Consume the RunStore-validated snapshot selected during discovery."""
+
+    return RUN_STORE.load_reviewable_processed_run(path.parent.name)
+
+
 def _load_inputs() -> tuple[Any | None, Any | None]:
     st.sidebar.header("결과 선택")
     available_results = _available_processed_results()
@@ -619,8 +639,11 @@ def _load_inputs() -> tuple[Any | None, Any | None]:
             st.info("검토할 Processed JSON을 업로드하세요.")
             return None, None
     try:
-        run = load_processed_data(source)
-    except DataLoadError as error:
+        if processed_mode == "발견된 결과 사용":
+            run = _load_discovered_processed_run(source)
+        else:
+            run = load_processed_data(source)
+    except (DataLoadError, FileNotFoundError, ValueError) as error:
         st.error(f"Processed 결과를 읽을 수 없습니다: {error}")
         return None, None
 

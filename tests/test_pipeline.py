@@ -290,6 +290,46 @@ def test_run_id_handshake_occurs_only_after_lock_acquisition(tmp_path: Path) -> 
         orchestrator.run("local-lab-v1", ["XSS"], on_run_created=created.append)
 
     assert created == []
+    failed_run_ids = [
+        run_dir.name
+        for run_dir in store.runs_dir.iterdir()
+        if run_dir.is_dir() and run_dir.name != active.scan_run_id
+    ]
+    assert len(failed_run_ids) == 1
+    failed = store.load_status(failed_run_ids[0])
+    assert failed.status is ExecutionStatus.FAILED
+    assert failed.error is not None
+    assert failed.error.code == "RUN_ALREADY_ACTIVE"
+
+
+def test_run_reconciles_old_orphan_after_owning_lock_then_completes(
+    tmp_path: Path,
+) -> None:
+    store = RunStore(tmp_path / "data")
+    orphan = store.create_run(
+        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+    )
+    observed_owner_statuses: list[ExecutionStatus] = []
+
+    def xss(targets, context, progress):
+        observed_owner_statuses.append(store.load_status(context.scan_run_id).status)
+        assert store.load_status(orphan.scan_run_id).status is ExecutionStatus.FAILED
+        return [_finding("XSS", "xss-1")]
+
+    orchestrator = PipelineOrchestrator(
+        store,
+        xss_scanner=xss,
+        sqli_scanner=lambda targets, context, progress: [],
+        triage=_triage,
+        manifest_resolver=lambda target_set_id: _manifest(),
+    )
+
+    result = orchestrator.run("local-lab-v1", ["XSS"])
+
+    assert observed_owner_statuses == [ExecutionStatus.RUNNING]
+    assert result.status is ExecutionStatus.COMPLETED
+    assert store.load_status(orphan.scan_run_id).status is ExecutionStatus.FAILED
+    assert store.load_status(result.scan_run_id).status is ExecutionStatus.COMPLETED
 
 
 def test_cli_component_loading_skips_unrequested_scanner(monkeypatch) -> None:

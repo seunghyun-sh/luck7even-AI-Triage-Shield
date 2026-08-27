@@ -241,7 +241,12 @@ def test_pipeline_lock_rejects_duplicate_and_releases_owned_lock(tmp_path: Path)
     run_id = "run-20260827-111500-a1b2c3"
     lock_path = tmp_path / "data" / "runs" / ".pipeline.lock"
 
-    with store.pipeline_lock(run_id):
+    lock = store.pipeline_lock(run_id)
+    assert lock.scan_run_id == run_id
+    assert not lock.held
+    assert lock.owns_data_root(store.data_root)
+    with lock:
+        assert lock.held
         payload = json.loads(lock_path.read_text(encoding="utf-8"))
         assert payload["scan_run_id"] == run_id
         assert payload["pid"] > 0
@@ -255,6 +260,7 @@ def test_pipeline_lock_rejects_duplicate_and_releases_owned_lock(tmp_path: Path)
         assert str(tmp_path) not in str(exc_info.value)
 
     assert lock_path.exists()
+    assert not lock.held
     assert not store.pipeline_lock_active()
 
 
@@ -322,6 +328,22 @@ def test_active_run_status_rejects_malformed_or_terminal_owner(tmp_path: Path) -
         assert store.active_run_status() is None
 
 
+def test_active_run_status_rejects_owner_status_identity_mismatch(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "data")
+    status = store.create_run(
+        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+    )
+    mismatched_id = "run-20260827-111501-b2c3d4"
+    payload = status.model_dump(mode="json")
+    payload["scan_run_id"] = mismatched_id
+
+    with store.pipeline_lock(status.scan_run_id):
+        (store.runs_dir / status.scan_run_id / "status.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        assert store.active_run_status() is None
+
+
 def test_reviewable_processed_run_requires_coupled_terminal_artifacts(
     tmp_path: Path,
 ) -> None:
@@ -379,28 +401,52 @@ def test_reviewable_processed_run_rejects_malformed_and_symlink_artifacts(
         store.load_reviewable_processed_run(symlink_status.scan_run_id)
 
 
-def test_reconcile_orphaned_runs_fails_only_lockless_nonterminal_runs(
+def test_reconcile_orphaned_runs_requires_held_local_lock(
+    tmp_path: Path,
+) -> None:
+    store = RunStore(tmp_path / "data")
+    status = store.create_run(
+        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+    )
+    lock = store.pipeline_lock(status.scan_run_id)
+
+    with pytest.raises(TypeError):
+        store.reconcile_orphaned_runs()  # type: ignore[call-arg]
+
+    with pytest.raises(ValueError, match="held pipeline lock"):
+        store.reconcile_orphaned_runs(lock)
+
+    with lock:
+        pass
+
+    with pytest.raises(ValueError, match="held pipeline lock"):
+        store.reconcile_orphaned_runs(lock)
+
+    foreign_store = RunStore(tmp_path / "foreign-data")
+    with (
+        foreign_store.pipeline_lock(status.scan_run_id) as foreign_lock,
+        pytest.raises(ValueError, match="held pipeline lock"),
+    ):
+        store.reconcile_orphaned_runs(foreign_lock)
+
+
+def test_reconcile_orphaned_runs_fails_old_nonterminal_runs_but_not_owner(
     tmp_path: Path,
 ) -> None:
     store = RunStore(tmp_path / "data")
     orphan = store.create_run(
         RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
     )
-    protected = store.create_run(
+    owner = store.create_run(
         RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
     )
 
-    with store.pipeline_lock(protected.scan_run_id):
-        assert store.reconcile_orphaned_runs() == []
-        assert store.load_status(orphan.scan_run_id) == orphan
+    with store.pipeline_lock(owner.scan_run_id) as lock:
+        reconciled = store.reconcile_orphaned_runs(lock)
 
-    reconciled = store.reconcile_orphaned_runs()
-
-    assert {status.scan_run_id for status in reconciled} == {
-        orphan.scan_run_id,
-        protected.scan_run_id,
-    }
+    assert [status.scan_run_id for status in reconciled] == [orphan.scan_run_id]
     for recovered in reconciled:
         assert recovered.status is ExecutionStatus.FAILED
         assert recovered.error is not None
         assert recovered.error.code == "ORPHANED_RUN"
+    assert store.load_status(owner.scan_run_id) == owner

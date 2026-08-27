@@ -46,6 +46,23 @@ class PipelineLock:
         self._path = self._data_root / "runs" / ".pipeline.lock"
         self._descriptor: int | None = None
 
+    @property
+    def scan_run_id(self) -> str:
+        """Return the run identifier this lock instance owns when held."""
+
+        return self._scan_run_id
+
+    @property
+    def held(self) -> bool:
+        """Return whether this instance currently owns its advisory lock."""
+
+        return self._descriptor is not None
+
+    def owns_data_root(self, data_root: Path | str) -> bool:
+        """Return whether this lock guards the supplied run-store data root."""
+
+        return self._data_root.resolve() == Path(data_root).resolve()
+
     def __enter__(self) -> Self:
         self.acquire()
         return self
@@ -257,14 +274,18 @@ class RunStore:
             status = self.load_status(owner["scan_run_id"])
         except (OSError, ValueError):
             return None
+        if status.scan_run_id != owner["scan_run_id"]:
+            return None
         if status.status not in {ExecutionStatus.QUEUED, ExecutionStatus.RUNNING}:
             return None
         return status
 
-    def reconcile_orphaned_runs(self) -> list[RunStatusDocument]:
-        """Fail nonterminal runs only when no pipeline owner holds the lock."""
+    def reconcile_orphaned_runs(self, lock: PipelineLock) -> list[RunStatusDocument]:
+        """Fail old nonterminal runs while the supplied owner holds the lock."""
 
-        if self._pipeline_lock_is_held() or not self.runs_dir.is_dir():
+        if not lock.held or not lock.owns_data_root(self.data_root):
+            raise ValueError("Reconciliation requires this store's held pipeline lock.")
+        if not self.runs_dir.is_dir():
             return []
         reconciled: list[RunStatusDocument] = []
         for run_dir in self.runs_dir.iterdir():
@@ -274,6 +295,8 @@ class RunStore:
                 scan_run_id = _validate_run_id(run_dir.name)
                 status = self.load_status(scan_run_id)
             except (OSError, ValueError):
+                continue
+            if scan_run_id == lock.scan_run_id:
                 continue
             if status.status not in {ExecutionStatus.QUEUED, ExecutionStatus.RUNNING}:
                 continue

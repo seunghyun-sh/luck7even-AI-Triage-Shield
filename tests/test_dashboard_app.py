@@ -2,6 +2,7 @@
 
 import json
 import shutil
+from contextlib import nullcontext
 from datetime import timedelta
 from pathlib import Path
 
@@ -9,12 +10,17 @@ import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
 
+import dashboard.app as dashboard_app
 from dashboard.app import (
     _available_processed_results,
     _build_filtered_evaluation,
+    _display_ai_verdict,
     _display_enum,
+    _display_rule_verdict,
+    _load_discovered_processed_run,
     _priority_table,
     _processed_display_name,
+    _render_charts,
     _report_frame,
 )
 from dashboard.data_loader import (
@@ -504,6 +510,109 @@ def test_reviewer_enum_mapping_preserves_canonical_filter_and_aggregation_inputs
         _display_enum("ai_status_reason", "RULE_NOT_SUSPECTED")
         == "규칙상 의심되지 않음"
     )
+
+
+@pytest.mark.parametrize(
+    "replace_artifact",
+    [
+        lambda payload: payload.update(
+            {"scan_run_id": "run-20260827-000000-deadbe"}
+        ),
+        lambda payload: payload.update({"target_set_id": "replaced-target"}),
+        lambda payload: payload.clear(),
+    ],
+)
+def test_discovered_artifact_replacement_cannot_bypass_runstore_snapshot_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replace_artifact,
+) -> None:
+    store = RunStore(tmp_path)
+    monkeypatch.setattr(dashboard_app, "RUN_STORE", store)
+    monkeypatch.setattr(dashboard_app, "DATA_ROOT", tmp_path)
+    initial = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
+    payload = json.loads(SAMPLE_PATH.read_text())
+    payload.update(
+        {
+            "scan_run_id": initial.scan_run_id,
+            "target_set_id": initial.target_set_id,
+            "status": "PARTIAL",
+        }
+    )
+    artifact = tmp_path / "processed" / initial.scan_run_id / "results.json"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(json.dumps(payload), encoding="utf-8")
+    _terminal_run(store, initial, ExecutionStatus.PARTIAL)
+
+    assert _available_processed_results() == [artifact]
+
+    replace_artifact(payload)
+    artifact.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not available for review"):
+        _load_discovered_processed_run(artifact)
+
+
+def test_mixed_chart_display_mapping_keeps_canonical_aggregations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    findings = pd.DataFrame(
+        [
+            {
+                "vuln_type": "XSS",
+                "scan_status": "COMPLETED",
+                "rule_label": "SUSPECTED",
+                "ai_status": "COMPLETED",
+                "ai_label": "VULNERABLE",
+            },
+            {
+                "vuln_type": "XSS",
+                "scan_status": "COMPLETED",
+                "rule_label": "SAFE",
+                "ai_status": "NOT_REQUESTED",
+                "ai_label": None,
+            },
+            {
+                "vuln_type": "SQLI",
+                "scan_status": "COMPLETED",
+                "rule_label": "SAFE",
+                "ai_status": "FAILED",
+                "ai_label": None,
+            },
+            {
+                "vuln_type": "SQLI",
+                "scan_status": "FAILED",
+                "rule_label": None,
+                "ai_status": "NOT_REQUESTED",
+                "ai_label": None,
+            },
+        ]
+    )
+    canonical_comparison = build_rule_ai_comparison(findings)
+    figures = []
+    monkeypatch.setattr(dashboard_app.st, "markdown", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        dashboard_app.st, "columns", lambda count: [nullcontext() for _ in range(count)]
+    )
+    monkeypatch.setattr(
+        dashboard_app.st,
+        "plotly_chart",
+        lambda figure, **kwargs: figures.append(figure),
+    )
+
+    _render_charts(findings)
+
+    pd.testing.assert_frame_equal(
+        build_rule_ai_comparison(findings), canonical_comparison
+    )
+    assert _display_ai_verdict("NOT_REQUESTED") == "미요청"
+    assert _display_ai_verdict("FAILED") == "실패"
+    assert _display_rule_verdict("FAILED") == "실패"
+    assert set(figures[1].data[0].labels) == {"취약", "미요청", "실패"}
+    assert {trace.name for trace in figures[2].data} == {"취약", "미요청", "실패"}
+    assert {
+        value for trace in figures[2].data for value in trace.x
+    } == {"취약 의심", "양호", "실패"}
 
 
 def test_partial_banner_uses_unfiltered_full_run_counts() -> None:
