@@ -77,7 +77,7 @@ _COMPARISON_COLUMNS = (
     ("needs_human_review", "수동 검토 필요"),
 )
 _ILLEGAL_XML_C0 = frozenset(
-    chr(code) for code in (*range(0x00, 0x09), 0x0B, 0x0C, *range(0x0E, 0x20))
+    chr(code) for code in (*range(0x09), 0x0B, 0x0C, *range(0x0E, 0x20))
 )
 
 
