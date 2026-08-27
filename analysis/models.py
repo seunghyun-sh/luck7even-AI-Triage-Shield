@@ -1,170 +1,619 @@
-"""Shared input and output models for scanner and AI results.
-
-이 모듈의 "Contract B" 관련 데이터클래스들은 docs/data-contracts-v1.md
-(4. Contract B: raw findings)에서 정의한 팀 공통 규격을 그대로 코드로 옮긴 것이다.
-XSS 스캐너(우리 팀)가 이 규격의 "생산자"이고, OpenAI·데이터 처리 담당 팀이
-"소비자"다. 필드명, 자료형, enum 값을 계약 문서와 반드시 일치시켜야 하며,
-임의로 필드를 추가/삭제/이름 변경하면 소비자 쪽 파싱이 깨진다.
-"""
+"""Pydantic models for the canonical processed-results and ground-truth contracts."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from pathlib import PurePath, PureWindowsPath
+from typing import Literal, Self
+from urllib.parse import unquote, urlsplit
 
-# ============================================================
-# 내부 판정 라벨 (scanners/xss_rules.py 전용, 계약에는 직접 노출되지 않음)
-# ============================================================
-# 아래 네 값은 우리 스캐너 내부에서만 쓰는 "세분화된" 판정이다. 데이터 계약
-# (Contract B)의 rule.label은 SUSPECTED/SAFE/null 세 가지만 허용하므로, 이
-# 세분화된 값들은 scanners/xss_report.py가 SUSPECTED/SAFE로 압축하고, 대신
-# 원래의 세부 내용은 rule.reason과 response.evidence_summary 텍스트로 남긴다.
-# 아래로 갈수록 "더 위험함"을 의미하며, xss_rules.most_severe()가 이 순서로
-# 우선순위를 매긴다.
-NOT_REFLECTED = "NOT_REFLECTED"  # 페이로드가 응답에 전혀 나타나지 않음 (필터링됨/무관)
-REFLECTED_ESCAPED = "REFLECTED_ESCAPED"  # HTML 이스케이프된 형태로만 반사됨 (대체로 안전)
-REFLECTED_UNSANITIZED = "REFLECTED_UNSANITIZED"  # 입력 그대로 반사됨 (취약 가능성 높음)
-# Reflected XSS는 "요청 -> 응답" 한 번으로 판정할 수 있지만, Stored XSS는 그렇지 않다.
-# 글을 쓸 때(POST)는 정상적으로 저장됐다는 메시지만 보일 수도 있고, 실제로 다른 사람이
-# 그 글을 읽을 때(GET, 별도 요청) 비로소 스크립트가 실행된다. 그래서 이 라벨은
-# xss_rules.classify_reflection()이 직접 매기지 않고, 스캐너(xss.py)가 "주입 요청"과
-# "조회 요청" 두 단계를 모두 수행해서 조회 응답에서도 페이로드가 그대로 남아있는 것을
-# 확인했을 때만 부여한다. REFLECTED_UNSANITIZED보다 심각도를 더 높게 두는 이유는,
-# 공격자 자신의 요청/응답에만 국한되지 않고 이후 방문자 전원에게 영향을 주기 때문이다.
-STORED_XSS_CONFIRMED = "STORED_XSS_CONFIRMED"
-
-# ============================================================
-# Contract B가 실제로 허용하는 rule.label 값 (data-contracts-v1.md 2.4)
-# ============================================================
-RULE_LABEL_SUSPECTED = "SUSPECTED"
-RULE_LABEL_SAFE = "SAFE"
-
-# run status enum (data-contracts-v1.md 2.4, 4.2)
-RUN_STATUS_COMPLETED = "COMPLETED"
-RUN_STATUS_PARTIAL = "PARTIAL"
-RUN_STATUS_FAILED = "FAILED"
-
-# scan status enum (data-contracts-v1.md 2.4, 4.4)
-SCAN_STATUS_COMPLETED = "COMPLETED"
-SCAN_STATUS_FAILED = "FAILED"
-
-SCHEMA_VERSION = "1.0"
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
+from pydantic_core import PydanticCustomError
 
 
-@dataclass
-class ScanRequest:
-    """scan.request -- 실제로 보낸 요청 하나를 그대로 기록한다.
+class ContractModel(BaseModel):
+    """Base model that rejects fields outside data-contracts-v1."""
 
-    Contract B는 "요청 1번 = Finding 1건"을 전제로 한다. 즉 GET과 POST를 모두
-    시도했다면 각각 별도의 RawFinding으로 남아야 하며, 두 결과를 하나로 합쳐서는
-    안 된다.
-    """
-
-    url: str
-    method: str  # "GET" | "POST"
-    input_location: str  # "query" | "form" | "json" (계약 enum). "header"는 아래 참고.
-    parameter: str
-    payload: str
+    model_config = ConfigDict(extra="forbid")
 
 
-@dataclass
-class ScanResponse:
-    """scan.response -- 응답에서 얻은 정보. scan.status=FAILED면 전부 None(=JSON null)."""
+class VulnType(str, Enum):
+    XSS = "XSS"
+    SQLI = "SQLI"
 
-    http_status: int | None
-    elapsed_ms: int | None
-    baseline_elapsed_ms: int | None  # XSS는 null 허용(SQLi만 필수)
+
+class RunStatus(str, Enum):
+    COMPLETED = "COMPLETED"
+    PARTIAL = "PARTIAL"
+    FAILED = "FAILED"
+
+
+class ScanStatus(str, Enum):
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class RuleLabel(str, Enum):
+    SUSPECTED = "SUSPECTED"
+    SAFE = "SAFE"
+
+
+class AiStatus(str, Enum):
+    NOT_REQUESTED = "NOT_REQUESTED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class AiLabel(str, Enum):
+    VULNERABLE = "VULNERABLE"
+    SAFE = "SAFE"
+    INCONCLUSIVE = "INCONCLUSIVE"
+
+
+class AiStatusReason(str, Enum):
+    RULE_NOT_SUSPECTED = "RULE_NOT_SUSPECTED"
+    SCAN_FAILED = "SCAN_FAILED"
+    POLICY_EXCLUDED = "POLICY_EXCLUDED"
+
+
+class GroundTruthLabel(str, Enum):
+    VULNERABLE = "VULNERABLE"
+    SAFE = "SAFE"
+
+
+class ErrorDetail(ContractModel):
+    code: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+    retryable: StrictBool
+
+
+class RequestPolicy(ContractModel):
+    timeout_seconds: StrictInt = Field(gt=0)
+    follow_redirects: StrictBool
+
+
+class TargetInput(ContractModel):
+    location: Literal["query", "form", "json"]
+    parameters: dict[StrictStr, StrictStr | StrictInt | StrictFloat | StrictBool | None]
+    attack_parameter: StrictStr = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_attack_parameter(self) -> Self:
+        if self.attack_parameter not in self.parameters:
+            raise ValueError("attack_parameter must exist in parameters")
+        return self
+
+
+class TargetCase(ContractModel):
+    case_id: StrictStr = Field(min_length=1)
+    vuln_type: VulnType
+    path: StrictStr = Field(min_length=1)
+    method: Literal["GET", "POST"]
+    input: TargetInput
+    requires_pre_auth: StrictBool
+    auth_profile: StrictStr | None
+    payload_profile: StrictStr = Field(min_length=1)
+    manual_verification_profile: StrictStr = Field(min_length=1)
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        decoded = unquote(value)
+        path = PurePath(decoded)
+        windows_path = PureWindowsPath(decoded)
+        if (
+            not value.startswith("/")
+            or parsed.scheme
+            or parsed.netloc
+            or parsed.query
+            or parsed.fragment
+            or "\\" in value
+            or ".." in path.parts
+            or ".." in windows_path.parts
+        ):
+            raise ValueError("path must be a safe relative path rooted at /")
+        return value
+
+    @model_validator(mode="after")
+    def validate_auth_profile(self) -> Self:
+        if self.requires_pre_auth and not self.auth_profile:
+            raise ValueError("pre-auth target requires an auth_profile")
+        if not self.requires_pre_auth and self.auth_profile is not None:
+            raise ValueError("target without pre-auth must not include an auth_profile")
+        return self
+
+
+class TargetManifest(ContractModel):
+    schema_version: Literal["1.0"]
+    target_set_id: StrictStr = Field(min_length=1)
+    base_url: StrictStr = Field(min_length=1)
+    request_policy: RequestPolicy
+    targets: list[TargetCase] = Field(min_length=1)
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        try:
+            port = parsed.port
+        except ValueError as error:
+            raise ValueError("base_url must have a valid port") from error
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or parsed.path not in {"", "/"}
+            or port is not None and not 0 <= port <= 65535
+        ):
+            raise ValueError("base_url must be an http or https origin without userinfo")
+        return value
+
+    @model_validator(mode="after")
+    def validate_case_ids(self) -> Self:
+        case_ids = [target.case_id for target in self.targets]
+        if len(case_ids) != len(set(case_ids)):
+            raise ValueError("case_id values must be unique within a target manifest")
+        return self
+
+
+class ScanRequest(ContractModel):
+    url: str = Field(min_length=1)
+    method: str = Field(min_length=1)
+    input_location: str = Field(min_length=1)
+    parameter: str = Field(min_length=1)
+    payload: str = Field(min_length=1)
+
+
+class ScanResponse(ContractModel):
+    http_status: StrictInt | None
+    elapsed_ms: StrictInt | None
+    baseline_elapsed_ms: StrictInt | None
     evidence_summary: str | None
-    html_path: str | None  # run 디렉터리 기준 상대경로. 예: "responses/XSS-000001.html"
+    html_path: str | None
+
+    @field_validator("http_status")
+    @classmethod
+    def validate_http_status(cls, value: int | None) -> int | None:
+        if value is not None and not 100 <= value <= 599:
+            raise ValueError("http_status must be between 100 and 599")
+        return value
+
+    @field_validator("elapsed_ms", "baseline_elapsed_ms")
+    @classmethod
+    def validate_elapsed_ms(cls, value: int | None) -> int | None:
+        if value is not None and value < 0:
+            raise ValueError("elapsed_ms values must be non-negative")
+        return value
+
+    @field_validator("html_path")
+    @classmethod
+    def validate_html_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        path = PurePath(value)
+        windows_path = PureWindowsPath(value)
+        if (
+            not value
+            or path.is_absolute()
+            or windows_path.is_absolute()
+            or windows_path.drive
+            or ".." in path.parts
+            or ".." in windows_path.parts
+        ):
+            raise ValueError(
+                "html_path must be a safe relative path within the run directory"
+            )
+        return value
 
 
-@dataclass
-class ScanRule:
-    """scan.rule -- 규칙 기반 1차 판정. label은 SUSPECTED/SAFE만 허용(FAILED면 둘 다 null)."""
-
-    label: str | None
+class ScanRule(ContractModel):
+    label: RuleLabel | None
     reason: str | None
 
 
-@dataclass
-class ScanError:
-    """scan.error -- scan.status=FAILED일 때만 값이 있고, 그 외엔 None(=JSON null)."""
-
-    code: str
-    message: str
-    retryable: bool
-
-
-@dataclass
-class ScanResult:
-    """RawFinding.scan 전체."""
-
-    status: str  # "COMPLETED" | "FAILED"
+class ScanResult(ContractModel):
+    status: ScanStatus
     request: ScanRequest
     response: ScanResponse
     rule: ScanRule
-    error: ScanError | None
+    error: ErrorDetail | None
+
+    @model_validator(mode="after")
+    def validate_status_fields(self) -> Self:
+        if self.status is ScanStatus.COMPLETED:
+            if self.error is not None:
+                raise ValueError("completed scan must not include an error")
+            if (
+                self.response.http_status is None
+                or self.response.elapsed_ms is None
+                or self.response.evidence_summary is None
+            ):
+                raise ValueError(
+                    "completed scan requires http_status, elapsed_ms, and evidence_summary"
+                )
+            if self.rule.label is None or self.rule.reason is None:
+                raise ValueError("completed scan requires a rule label and reason")
+        else:
+            if self.error is None:
+                raise ValueError("failed scan requires an error")
+            if self.rule.label is not None or self.rule.reason is not None:
+                raise ValueError("failed scan must not include a rule label or reason")
+            if any(
+                value is not None
+                for value in (
+                    self.response.http_status,
+                    self.response.elapsed_ms,
+                    self.response.baseline_elapsed_ms,
+                    self.response.evidence_summary,
+                    self.response.html_path,
+                )
+            ):
+                raise ValueError("failed scan response fields must all be null")
+        return self
 
 
-@dataclass
-class RawFinding:
-    """Contract B의 RawFinding 1건.
+class AiResult(ContractModel):
+    status: AiStatus
+    status_reason: AiStatusReason | None
+    label: AiLabel | None
+    confidence: float | None
+    needs_human_review: StrictBool
+    assessment_summary: str | None
+    source_evidence: str | None
+    impact: str | None
+    recommendation: str | None
+    manual_check: str | None
+    report_paragraph: str | None
+    error: ErrorDetail | None
 
-    case_id는 (대상, 파라미터, 테스트 케이스)에 대해 실행마다 바뀌지 않는
-    안정적인 값이어야 한다(향후 ground truth와 결합하는 키). finding_id는 이번
-    실행(scan_run_id) 안에서만 유일하면 된다.
-    """
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def reject_non_numeric_confidence(cls, value: object) -> object:
+        if isinstance(value, (str, bool)):
+            raise PydanticCustomError("numeric_type", "confidence must be numeric")
+        return value
 
-    case_id: str
-    finding_id: str
-    scanned_at: str  # ISO 8601, timezone offset 포함
-    vuln_type: str  # 항상 "XSS"
+    @model_validator(mode="after")
+    def validate_status_fields(self) -> Self:
+        generated_fields = (
+            self.assessment_summary,
+            self.source_evidence,
+            self.impact,
+            self.recommendation,
+            self.manual_check,
+            self.report_paragraph,
+        )
+        if self.confidence is not None and not 0.0 <= self.confidence <= 1.0:
+            raise ValueError("confidence must be between 0.0 and 1.0")
+
+        if self.status is AiStatus.COMPLETED:
+            if self.status_reason is not None or self.error is not None:
+                raise ValueError(
+                    "completed AI result must not include status_reason or error"
+                )
+            if self.label is None or self.confidence is None:
+                raise ValueError("completed AI result requires label and confidence")
+            if any(value is None or not value.strip() for value in generated_fields):
+                raise ValueError(
+                    "completed AI result requires all generated text fields"
+                )
+            if self.label is AiLabel.INCONCLUSIVE and not self.needs_human_review:
+                raise ValueError("inconclusive AI result requires human review")
+        elif self.status is AiStatus.NOT_REQUESTED:
+            if self.status_reason is None:
+                raise ValueError("not-requested AI result requires status_reason")
+            if (
+                self.label is not None
+                or self.confidence is not None
+                or any(value is not None for value in generated_fields)
+            ):
+                raise ValueError(
+                    "not-requested AI result must not include a label, confidence, or generated text"
+                )
+            if self.error is not None:
+                raise ValueError("not-requested AI result must not include an error")
+        else:
+            if self.status_reason is not None:
+                raise ValueError("failed AI result must not include status_reason")
+            if (
+                self.label is not None
+                or self.confidence is not None
+                or any(value is not None for value in generated_fields)
+            ):
+                raise ValueError(
+                    "failed AI result must not include a label, confidence, or generated text"
+                )
+            if not self.needs_human_review:
+                raise ValueError("failed AI result requires human review")
+            if self.error is None:
+                raise ValueError("failed AI result requires an error")
+        return self
+
+
+class ProcessedFinding(ContractModel):
+    case_id: str = Field(min_length=1)
+    finding_id: str = Field(min_length=1)
+    scanned_at: datetime
+    vuln_type: VulnType
+    scan: ScanResult
+    ai: AiResult
+
+    @field_validator("scanned_at", mode="before")
+    @classmethod
+    def reject_numeric_scanned_at(cls, value: object) -> object:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            raise PydanticCustomError(
+                "datetime_type", "scanned_at must be an ISO 8601 timestamp string"
+            )
+        return value
+
+    @field_validator("scanned_at")
+    @classmethod
+    def validate_scanned_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("scanned_at must include a timezone offset")
+        return value
+
+    @model_validator(mode="after")
+    def validate_cross_status_fields(self) -> Self:
+        if (
+            self.scan.status is ScanStatus.COMPLETED
+            and self.vuln_type is VulnType.SQLI
+            and self.scan.response.baseline_elapsed_ms is None
+        ):
+            raise ValueError("completed SQLI scan requires baseline_elapsed_ms")
+        if self.scan.status is ScanStatus.FAILED and (
+            self.ai.status is not AiStatus.NOT_REQUESTED
+            or self.ai.status_reason is not AiStatusReason.SCAN_FAILED
+            or not self.ai.needs_human_review
+        ):
+            raise ValueError(
+                "failed scan requires NOT_REQUESTED AI with SCAN_FAILED and human review"
+            )
+        if (
+            self.ai.status is AiStatus.NOT_REQUESTED
+            and self.ai.status_reason is AiStatusReason.SCAN_FAILED
+            and self.scan.status is not ScanStatus.FAILED
+        ):
+            raise ValueError("SCAN_FAILED AI status_reason requires a failed scan")
+        if (
+            self.ai.status is AiStatus.NOT_REQUESTED
+            and self.ai.status_reason is AiStatusReason.RULE_NOT_SUSPECTED
+            and (
+                self.scan.status is not ScanStatus.COMPLETED
+                or self.scan.rule.label is not RuleLabel.SAFE
+            )
+        ):
+            raise ValueError(
+                "RULE_NOT_SUSPECTED requires a completed scan with a SAFE rule"
+            )
+        return self
+
+
+class ProcessedRun(ContractModel):
+    schema_version: Literal["1.0"]
+    scan_run_id: str = Field(min_length=1)
+    target_set_id: str = Field(min_length=1)
+    started_at: datetime
+    completed_at: datetime | None
+    status: RunStatus
+    findings: list[ProcessedFinding]
+
+    @field_validator("started_at", "completed_at", mode="before")
+    @classmethod
+    def reject_numeric_timestamps(cls, value: object) -> object:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            raise PydanticCustomError(
+                "datetime_type", "timestamps must be ISO 8601 timestamp strings"
+            )
+        return value
+
+    @field_validator("started_at", "completed_at")
+    @classmethod
+    def validate_timestamp(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("timestamps must include a timezone offset")
+        return value
+
+    @model_validator(mode="after")
+    def validate_run(self) -> Self:
+        if self.completed_at is not None and self.completed_at < self.started_at:
+            raise ValueError("completed_at must not precede started_at")
+        finding_ids = [finding.finding_id for finding in self.findings]
+        if len(finding_ids) != len(set(finding_ids)):
+            raise ValueError("finding_id values must be unique within a scan run")
+        case_ids = [finding.case_id for finding in self.findings]
+        if len(case_ids) != len(set(case_ids)):
+            raise ValueError("case_id values must be unique within a scan run")
+
+        has_failure = any(
+            finding.scan.status is ScanStatus.FAILED
+            or finding.ai.status is AiStatus.FAILED
+            for finding in self.findings
+        )
+        has_usable_completed_scan = any(
+            finding.scan.status is ScanStatus.COMPLETED for finding in self.findings
+        )
+        if (
+            self.status in {RunStatus.COMPLETED, RunStatus.PARTIAL}
+            and self.completed_at is None
+        ):
+            raise ValueError("completed and partial runs require completed_at")
+        if self.status is RunStatus.COMPLETED:
+            if has_failure:
+                raise ValueError("completed run must not contain scan or AI failures")
+        elif self.status is RunStatus.PARTIAL:
+            if not has_failure or not has_usable_completed_scan:
+                raise ValueError(
+                    "partial run requires failures and a usable completed scan"
+                )
+        elif has_usable_completed_scan:
+            raise ValueError("failed run must not contain a usable completed scan")
+        return self
+
+
+class RawFinding(ContractModel):
+    case_id: StrictStr = Field(min_length=1)
+    finding_id: StrictStr = Field(min_length=1)
+    scanned_at: datetime
+    vuln_type: VulnType
     scan: ScanResult
 
+    @field_validator("scanned_at", mode="before")
+    @classmethod
+    def reject_numeric_scanned_at(cls, value: object) -> object:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            raise PydanticCustomError(
+                "datetime_type", "scanned_at must be an ISO 8601 timestamp string"
+            )
+        return value
 
-@dataclass
-class RunEnvelope:
-    """Contract B 최상위 envelope. data/raw/<scan_run_id>/findings.json에 그대로 저장된다."""
+    @field_validator("scanned_at")
+    @classmethod
+    def validate_scanned_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("scanned_at must include a timezone offset")
+        return value
 
-    scan_run_id: str
-    target_set_id: str
-    started_at: str
-    completed_at: str | None
-    status: str  # run status enum
-    findings: list[RawFinding] = field(default_factory=list)
-    schema_version: str = SCHEMA_VERSION
-
-
-# ============================================================
-# Contract A: target manifest (docs/data-contracts-v1.md 3장)
-# ============================================================
-# 생산자는 환경 구축팀, 소비자는 우리(XSS·SQLi 스캐너)다. scanners/pipeline/xss.py가
-# 이 타입으로 매니페스트 JSON을 읽어들인다.
+    @model_validator(mode="after")
+    def validate_sqli_baseline(self) -> Self:
+        if (
+            self.scan.status is ScanStatus.COMPLETED
+            and self.vuln_type is VulnType.SQLI
+            and self.scan.response.baseline_elapsed_ms is None
+        ):
+            raise ValueError("completed SQLI scan requires baseline_elapsed_ms")
+        return self
 
 
-@dataclass
-class TargetCase:
-    """Contract A의 target 항목 1개.
+class RawRun(ContractModel):
+    schema_version: Literal["1.0"]
+    scan_run_id: StrictStr = Field(min_length=1)
+    target_set_id: StrictStr = Field(min_length=1)
+    started_at: datetime
+    completed_at: datetime | None
+    status: RunStatus
+    findings: list[RawFinding]
 
-    계약이 정의하지 않은 필드도 하나 들어있다: verification_mode(아래 참고).
-    """
+    @field_validator("started_at", "completed_at", mode="before")
+    @classmethod
+    def reject_numeric_timestamps(cls, value: object) -> object:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            raise PydanticCustomError(
+                "datetime_type", "timestamps must be ISO 8601 timestamp strings"
+            )
+        return value
 
-    case_id: str
-    vuln_type: str
-    path: str  # "/"로 시작하는 상대 경로
-    method: str  # "GET" | "POST"
-    input_location: str  # "query" | "form" | "json"
-    input_parameters: dict[str, str]  # 정상 기준값(비밀값 아님)
-    attack_parameter: str  # input_parameters에 존재해야 함
-    requires_pre_auth: bool
-    auth_profile: str | None
-    payload_profile: str
-    manual_verification_profile: str
-    # 계약에 없는 확장 필드: "reflected"(기본) | "stored". Stored XSS는 주입 후
-    # 별도 조회 요청으로 저장 여부까지 확인해야 하는데, Contract A에는 이걸 표현할
-    # 필드가 없어서 우리가 임시로 추가했다. 통합 담당과 추후 확인 필요.
-    verification_mode: str = "reflected"
-    # 계약에 없는 확장 필드: Stored XSS 확인용 조회 경로. 주입 경로(path)와 조회
-    # 경로가 같으면 생략 가능(None이면 path를 그대로 재사용). NovaStream처럼 글
-    # 작성(POST /titles/<id>/reviews)과 실행 지점(GET /admin/reviews)이 다른
-    # 페이지인 경우에 필요하다.
-    verify_path: str | None = None
+    @field_validator("started_at", "completed_at")
+    @classmethod
+    def validate_timestamp(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("timestamps must include a timezone offset")
+        return value
+
+    @model_validator(mode="after")
+    def validate_run(self) -> Self:
+        if self.completed_at is not None and self.completed_at < self.started_at:
+            raise ValueError("completed_at must not precede started_at")
+        finding_ids = [finding.finding_id for finding in self.findings]
+        if len(finding_ids) != len(set(finding_ids)):
+            raise ValueError("finding_id values must be unique within a scan run")
+        case_ids = [finding.case_id for finding in self.findings]
+        if len(case_ids) != len(set(case_ids)):
+            raise ValueError("case_id values must be unique within a scan run")
+
+        has_failed_scan = any(
+            finding.scan.status is ScanStatus.FAILED for finding in self.findings
+        )
+        has_usable_completed_scan = any(
+            finding.scan.status is ScanStatus.COMPLETED for finding in self.findings
+        )
+        if (
+            self.status in {RunStatus.COMPLETED, RunStatus.PARTIAL}
+            and self.completed_at is None
+        ):
+            raise ValueError("completed and partial runs require completed_at")
+        if self.status is RunStatus.COMPLETED:
+            if has_failed_scan:
+                raise ValueError("completed run must not contain scan failures")
+        elif self.status is RunStatus.PARTIAL:
+            if not has_failed_scan or not has_usable_completed_scan:
+                raise ValueError(
+                    "partial run requires scan failures and a usable completed scan"
+                )
+        elif has_usable_completed_scan:
+            raise ValueError("failed run must not contain a usable completed scan")
+        return self
+
+
+class GroundTruthCase(ContractModel):
+    case_id: str = Field(min_length=1)
+    vuln_type: VulnType
+    label: GroundTruthLabel
+    evidence_summary: str = Field(min_length=1)
+    assessed_at: datetime
+
+    @field_validator("assessed_at", mode="before")
+    @classmethod
+    def reject_numeric_assessed_at(cls, value: object) -> object:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            raise PydanticCustomError(
+                "datetime_type", "assessed_at must be an ISO 8601 timestamp string"
+            )
+        return value
+
+    @field_validator("assessed_at")
+    @classmethod
+    def validate_assessed_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("assessed_at must include a timezone offset")
+        return value
+
+
+class GroundTruthSet(ContractModel):
+    schema_version: Literal["1.0"]
+    assessment_set_id: str = Field(min_length=1)
+    target_set_id: str = Field(min_length=1)
+    assessor_tool: str = Field(min_length=1)
+    created_at: datetime
+    cases: list[GroundTruthCase]
+
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def reject_numeric_created_at(cls, value: object) -> object:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            raise PydanticCustomError(
+                "datetime_type", "created_at must be an ISO 8601 timestamp string"
+            )
+        return value
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_created_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("created_at must include a timezone offset")
+        return value
+
+    @model_validator(mode="after")
+    def validate_case_ids(self) -> Self:
+        case_ids = [case.case_id for case in self.cases]
+        if len(case_ids) != len(set(case_ids)):
+            raise ValueError(
+                "ground-truth case_id values must be unique within a target_set_id"
+            )
+        return self

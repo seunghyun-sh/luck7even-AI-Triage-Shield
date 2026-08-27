@@ -3,25 +3,34 @@
 단순 Yes/No 2단계가 아니라 3단계로 나누는 이유: 페이로드가 HTML 이스케이프된 채로
 돌아온 경우(예: <script> -> &lt;script&gt;)는 "반사는 됐지만" 브라우저에서 스크립트로
 실행되지 않으므로 실제로는 안전한 경우가 대부분이다. 이렇게 미리 구분해두면 이후
-AI 2차 판정(analysis/ai_triage.py) 단계에서 오탐을 줄이는 데 도움이 된다.
+AI 2차 판정 단계에서 오탐을 줄이는 데 도움이 된다.
+
+여기서 쓰는 라벨(NOT_REFLECTED 등)은 팀 공통 데이터 계약(analysis/models.py)에는
+없는, 이 모듈 내부 전용 값이다. 공통 계약의 canonical 모델은 extra="forbid"로
+임의 필드/값 추가를 막기 때문에, 이런 세분화된 내부 판정을 그 안에 넣을 수 없다.
+대신 scanners/xss_report.py가 이 내부 라벨을 계약이 허용하는 RuleLabel(SUSPECTED/
+SAFE)로 압축해서 내보낸다.
 """
 
 from __future__ import annotations
 
 import html
 
-from analysis.models import (
-    NOT_REFLECTED,
-    REFLECTED_ESCAPED,
-    REFLECTED_UNSANITIZED,
-    STORED_XSS_CONFIRMED,
-)
-
 # 판정 라벨별 심각도 점수. 숫자가 클수록 더 위험하다고 간주한다.
 # GET/POST 두 응답 중 더 심각한 쪽을 최종 결과로 채택할 때, 그리고 저장형 XSS의
 # "주입 응답"과 "조회 응답" 판정을 합칠 때 모두 이 우선순위로 비교한다(most_severe 참고).
-# STORED_XSS_CONFIRMED는 이 모듈이 직접 매기지 않고 xss.py가 조회(GET) 응답에서도
-# 페이로드가 그대로 남아있음을 확인했을 때만 승격시키므로, 여기서는 심각도 값만 정의한다.
+NOT_REFLECTED = "NOT_REFLECTED"  # 페이로드가 응답에 전혀 나타나지 않음 (필터링됨/무관)
+REFLECTED_ESCAPED = "REFLECTED_ESCAPED"  # HTML 이스케이프된 형태로만 반사됨 (대체로 안전)
+REFLECTED_UNSANITIZED = "REFLECTED_UNSANITIZED"  # 입력 그대로 반사됨 (취약 가능성 높음)
+# Reflected XSS는 "요청 -> 응답" 한 번으로 판정할 수 있지만, Stored XSS는 그렇지 않다.
+# 글을 쓸 때(POST)는 정상적으로 저장됐다는 메시지만 보일 수도 있고, 실제로 다른 사람이
+# 그 글을 읽을 때(GET, 별도 요청) 비로소 스크립트가 실행된다. 그래서 이 라벨은
+# classify_reflection()이 직접 매기지 않고, 스캐너가 "주입 요청"과 "조회 요청" 두
+# 단계를 모두 수행해서 조회 응답에서도 페이로드가 그대로 남아있는 것을 확인했을 때만
+# 부여한다. REFLECTED_UNSANITIZED보다 심각도를 더 높게 두는 이유는, 공격자 자신의
+# 요청/응답에만 국한되지 않고 이후 방문자 전원에게 영향을 주기 때문이다.
+STORED_XSS_CONFIRMED = "STORED_XSS_CONFIRMED"
+
 _SEVERITY = {
     NOT_REFLECTED: 0,
     REFLECTED_ESCAPED: 1,

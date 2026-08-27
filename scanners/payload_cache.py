@@ -1,9 +1,11 @@
 """AI가 생성한 스캐너 페이로드를 파일로 캐싱하는 범용 유틸리티.
 
-LLM을 호출해서 페이로드를 생성하는 작업은 실행할 때마다 시간과 비용(API 요금)이
-든다. 그래서 한 번 성공적으로 생성한 배치는 data/raw/ 아래 파일로 저장해두고
-(.gitignore에 이미 등록되어 있어 커밋되지 않음), 이후 스캔에서는 별도로
-"다시 생성해줘"라고 요청하지 않는 한 이 캐시를 그대로 재사용한다.
+이 모듈 자체는 순수 파일 입출력만 담당하고 OpenAI를 호출하지 않는다.
+`scanners/tools/generate_xss_payload_profile.py`(사람이 직접 실행하는 오프라인
+도구)가 이 모듈로 캐시를 저장하고, `scanners/payload_profiles.py`(런타임
+스캐너)가 이 모듈로 캐시를 읽어온다. 캐시 파일은 data/raw/ 아래에 저장되어
+(.gitignore에 이미 등록되어 있어 커밋되지 않음), 한 번 생성한 배치를 이후
+스캔에서 계속 재사용한다.
 
 캐시 파일 하나가 Contract A의 `payload_profile` 하나에 대응한다. 여러 실습
 환경(Lumi Market, NovaStream 등)의 매니페스트가 같은 payload_profile 이름을
@@ -45,8 +47,9 @@ def cache_path_for(profile: str, root: Path = DEFAULT_CACHE_ROOT) -> Path:
 def load(cache_path: Path) -> PayloadCache | None:
     """캐시 파일을 읽어온다. 파일이 없거나 형식이 깨졌으면 None을 반환한다.
 
-    None을 반환하는 경우 호출자(xss_payloads.get_payloads)는 "캐시 없음"으로
-    간주하고 AI를 새로 호출하게 된다.
+    None을 반환하는 경우 호출자(scanners.payload_profiles.load_payload_profile)는
+    "캐시 없음"으로 간주하고 PayloadProfileMissingError를 던진다(런타임
+    스캐너는 여기서 AI를 호출하지 않는다 -- scanners/tools/ 참고).
     """
     if not cache_path.exists():
         return None

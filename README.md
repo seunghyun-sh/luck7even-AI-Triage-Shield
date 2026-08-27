@@ -28,13 +28,16 @@ XSS와 SQL Injection 진단 결과를 수집하고, 규칙 기반 1차 판정과
 ├── docs/                  # 아키텍처와 팀 문서
 ├── lab_app/               # 이 브랜치의 자리표시자 스켈레톤(health 체크만 있음, 아래 참고)
 ├── scanners/              # XSS·SQLi 스캐너와 공통 로직
+│   ├── xss.py             # 공개 진입점: scanners.xss.scan (main.py가 찾는 경로)
 │   ├── base.py            # 공용 HTTP 헬퍼(같은 호스트로만 리다이렉트 추적 등)
-│   ├── xss_payloads.py    # AI 페이로드 생성(payload_profile 단위)
-│   ├── payload_cache.py   # payload_profile별 페이로드 캐시 파일 입출력
+│   ├── payload_cache.py   # payload_profile별 페이로드 캐시 파일 입출력(순수 I/O)
+│   ├── payload_profiles.py # 런타임 스캐너용 payload_profile 로더 (OpenAI 호출 없음)
+│   ├── tools/
+│   │   └── generate_xss_payload_profile.py  # AI 페이로드 생성(사람이 직접 실행하는 오프라인 도구)
 │   ├── xss_rules.py       # 반사 여부 내부 판정 로직
-│   ├── xss_report.py      # 내부 판정 -> Contract B(raw findings) 조립 + sidecar 저장
-│   └── pipeline/          # main.py가 실제로 호출하는 계약 준수 스캐너
-│       └── xss.py         # scan(targets, scan_run_id, on_progress) -- 실제 실습 환경 대상
+│   ├── xss_report.py      # 내부 판정 -> canonical RawFinding 조립 + sidecar 저장
+│   └── pipeline/
+│       └── xss.py         # scan(targets, context, on_progress)의 실제 구현
 ├── tests/                 # 자동화 테스트
 ├── main.py                # 로컬 통합 실행 진입점
 └── requirements.txt
@@ -95,64 +98,59 @@ python -m lab_app_2.app   # http://127.0.0.1:5000
 python main.py --targets configs/targets.example.json
 ```
 
-### 4-1. 파이프라인용 XSS 스캐너 (`scanners/pipeline/xss.py`)
+### 4-1. 파이프라인용 XSS 스캐너 (`scanners.xss.scan`)
 
-`main.py`(통합 담당)가 실제로 호출할 것을 전제로, 실행 계약이 정의한 `scan(targets, scan_run_id, on_progress) -> list[RawFinding]` 인터페이스를 구현합니다. 각 실습 환경에서 **실제로 XSS 취약점이 확인된 페이지·입력칸만** 대상으로 하며(짐작으로 아무 입력창이나 찌르지 않음), 페이로드를 어느 파라미터에 넣어야 하는지는 타겟 매니페스트 JSON에 정확히 명시되어 있습니다.
+`main.py`(통합 담당)의 `orchestration.PipelineOrchestrator`가 실제로 호출하는 진입점입니다. 시그니처는 팀 실행 계약이 정의한 대로입니다.
 
-| 환경 | 매니페스트 | 케이스 |
-| --- | --- | --- |
-| 1번 (Lumi Market) | `configs/lumi_market_1_xss_targets.example.json` | Reflected: `GET /search` query `q` · Stored: `POST /reviews` form `content` (같은 `/reviews`에서 확인) |
-| 2번 (NovaStream) | `configs/novastream_2_xss_targets.example.json` | Reflected: `GET /discover` query `q` · Stored: `POST /titles/1/reviews` form `body` (다른 페이지 `GET /admin/reviews`에서 확인) |
-
-로컬에서 직접 확인해보려면(main.py 통합 전 임시 실행 경로, 실제 파이프라인은 이 CLI가 아니라 `scan()` 함수를 직접 import해서 씀):
-
-```bash
-python -m scanners.pipeline.xss \
-  --targets configs/lumi_market_1_xss_targets.example.json \
-  --base-url http://127.0.0.1:5001 \
-  --target-set-id lumi-market-1
-
-python -m scanners.pipeline.xss \
-  --targets configs/novastream_2_xss_targets.example.json \
-  --base-url http://127.0.0.1:5000 \
-  --target-set-id novastream-2
+```python
+def scan(targets: list[TargetCase], context: ScanContext, on_progress: ProgressCallback) -> list[RawFinding]:
 ```
 
-주요 옵션:
+`scanners/xss.py`는 실제 구현이 있는 `scanners/pipeline/xss.py`의 `scan`을 그대로 재수출합니다. `ScanContext`는 `orchestration` 패키지(통합 담당 소유, `feature/dashboard-contracts`)가 제공하며 `scan_run_id`, registry에서 재검증된 `base_url`, `request_policy`(timeout·redirect 정책), `responses_dir`, `resolve_auth_profile()`을 담고 있습니다. 이 스캐너는 파일 경로나 호스트를 스스로 계산하지 않고 전부 `context`에서 받습니다.
 
-- `--count`: 캐시가 없을 때 AI에게 요청할 페이로드 개수 (기본 100)
-- `--refresh-payloads`: 캐시를 무시하고 AI 페이로드를 새로 생성
-- `--timeout`: 요청 하나당 타임아웃(초, 기본 5)
+각 실습 환경에서 **실제로 XSS 취약점이 확인된 페이지·입력칸만** 대상으로 하며, 페이로드를 어느 파라미터에 넣어야 하는지는 타겟 매니페스트 JSON에 정확히 명시되어 있습니다.
 
-**AI 페이로드 생성과 캐싱**: 매니페스트의 각 케이스는 `payload_profile`(예: `"xss-v1"`)을 갖고 있습니다. `scan()`은 실행할 때마다 페이로드를 새로 만들지 않고, `data/raw/payload_profiles/<payload_profile>.json`(Git 제외)에 저장된 캐시가 있으면 그대로 재사용합니다. 캐시가 없을 때만 OpenAI를 호출해 100개 안팎의 페이로드(실제 공격 + 오탐 유도용 무해한 텍스트를 절반씩 섞음, `scanners/xss_payloads.py`)를 생성하고 캐시에 저장합니다. **같은 `payload_profile`을 쓰는 두 실습 환경(Lumi Market, NovaStream)은 이 캐시를 공유**하므로, 한 번 생성되면 둘 다 같은 페이로드 집합을 재사용하고 AI를 중복 호출하지 않습니다. `.env`에 `OPENAI_API_KEY`가 없거나 호출이 실패하면 작은 고정 페이로드 몇 개로 대체하되, 그 결과는 캐시에 저장하지 않아 다음 실행에서 다시 AI 호출을 시도합니다.
+| 환경 | target_set_id | 매니페스트 | 케이스 |
+| --- | --- | --- | --- |
+| 1번 (Lumi Market) | `lumi-market-1` | `configs/lumi_market_1_xss_targets.example.json` | Reflected: `GET /search` query `q` · Stored: `POST /reviews` form `content` (같은 `/reviews`에서 확인) |
+| 2번 (NovaStream) | `novastream-2` | `configs/novastream_2_xss_targets.example.json` | Reflected: `GET /discover` query `q` · Stored: `POST /titles/1/reviews` form `body` (다른 페이지 `GET /admin/reviews`에서 확인) |
 
-**실행 계약에 명시되지 않아 실용적으로 채운 부분** (통합 담당과 추후 확인 필요):
+두 매니페스트 모두 `configs/target-registry.json`에 등록되어 있고(등록된 `base_url`과 매니페스트 자체의 `base_url`이 정확히 일치해야 함), 지금은 로컬 주소를 가리킵니다. 이후 서버에 배포되면 이 두 값을 실제 서버 주소로 갱신하면 됩니다.
 
-- `base_url`: 계약의 target manifest에는 최상위에 `base_url`이 있지만, `scan()` 함수 시그니처 자체에는 전달 방법이 없어 키워드 인자로 받습니다.
-- `TargetCase.verification_mode`(`"reflected"`/`"stored"`)와 `verify_path`: Stored XSS의 2단계 검증(주입 후 별도 조회) 여부와, 작성 페이지와 확인 페이지가 다를 때(NovaStream처럼) 어디를 조회할지를 정하는 값인데, Contract A의 정식 필드에는 이를 표현할 곳이 없어 매니페스트 JSON에 추가 필드로 넣었습니다. 작성·확인 페이지가 같으면 `verify_path`는 생략합니다.
-- `auth_profile`/`requires_pre_auth=true` 케이스의 인증 흐름은 아직 설계하지 않았습니다. 지금까지 확인된 케이스는 모두 인증이 필요 없어 문제가 안 되지만, 해당 케이스를 만나면 `NotImplementedError`를 던지도록 명시적으로 막아뒀습니다.
-- **스캐너의 OpenAI 호출**: 실행 계약(11.5)은 "스캐너가 OpenAI API를 호출하지 않는다"고 명시하지만, 위 페이로드 생성 때문에 이 스캐너는 실행 경로 안에서 OpenAI를 호출합니다. 결과 판정용 2차 AI 호출과는 성격이 다르다고 보고 일단 이대로 두었으나, 정식 `payload_profile` 파이프라인이 합의되면 재검토가 필요합니다.
+**AI 페이로드 생성은 런타임과 분리되어 있습니다.** 실행 계약은 "런타임 스캐너는 OpenAI API를 호출하지 않는다"고 명시합니다. 그래서 페이로드 생성은 사람이 직접 실행하는 별도 도구로 뺐습니다.
 
-#### 결과 파일 형식 (Contract B: raw findings)
+```bash
+python -m scanners.tools.generate_xss_payload_profile --profile xss-v1 --count 100
+```
 
-이 스캐너의 출력은 팀 공통 데이터 계약 [`docs/data-contracts-v1.md`](docs/data-contracts-v1.md)의 **Contract B(raw findings)** 규격을 따릅니다. 실제 경로는 `data/raw/<scan_run_id>/findings.json`이며, 응답 본문 전체는 JSON에 넣지 않고 같은 디렉터리의 `responses/<finding_id>.html`에 sidecar 파일로 따로 저장합니다(Git에는 올라가지 않음).
+이 명령은 `data/raw/payload_profiles/xss-v1.json`(Git 제외)에 실제 공격 페이로드와 오탐 유도용 무해한 텍스트를 절반씩 섞어 저장하고, 각 항목에 안정적인 `payload_case_id`(`ai-001`, ...)를 붙입니다. **생성 후에는 이 파일을 사람이 열어 후보를 검토**해야 합니다(필요하면 직접 수정/삭제). 이미 파일이 있으면 `--force` 없이는 덮어쓰지 않습니다. 두 매니페스트 모두 `payload_profile: "xss-v1"`을 쓰므로 한 번만 생성하면 두 환경이 공유합니다.
 
-최상위 envelope:
+런타임 스캐너(`scanners/payload_profiles.py`)는 이 파일이 없거나 손상되면 `PayloadProfileMissingError`를 던지고 멈춥니다 -- AI를 대신 호출하거나 임의 값으로 조용히 계속 실행하지 않습니다.
 
-| 필드 | 설명 |
-| --- | --- |
-| `schema_version` | 계약 버전 (`"1.0"`) |
-| `scan_run_id` | 이번 실행을 식별하는 유일 ID |
-| `target_set_id` | `--target-set-id`로 지정한 값 |
-| `started_at` / `completed_at` | ISO 8601 시각(타임존 포함) |
-| `status` | `COMPLETED` / `PARTIAL`(일부 요청 실패) / `FAILED`(로그인 실패 등으로 결과 자체를 못 만듦) |
-| `findings` | 아래 RawFinding 배열 |
+로컬에서 직접 확인해보려면(main.py/orchestration 통합 전 임시 실행 경로 -- `orchestration.ScanContext`와 같은 모양의 로컬 대역을 직접 만들어 `scan()`을 호출함):
+
+```bash
+python -m scanners.pipeline.xss --targets configs/lumi_market_1_xss_targets.example.json
+python -m scanners.pipeline.xss --targets configs/novastream_2_xss_targets.example.json
+```
+
+(`--base-url`을 추가로 주면 매니페스트 자체의 `base_url` 대신 그 주소로 실행합니다. 아직 로컬에서 `pip install`할 수 있는 `orchestration` 패키지가 이 브랜치엔 없으므로, main.py/orchestration과 실제로 통합된 뒤에는 이 CLI 대신 `scanners.xss.scan`을 직접 import해서 씁니다.)
+
+**계약을 따르며 실용적으로 채운 부분** (통합 담당과 추후 확인 필요):
+
+- Stored XSS 2단계 검증 여부는 `target.manual_verification_profile == "xss-stored"` 네이밍 규칙으로 판단합니다. `TargetCase`에는 이를 위한 전용 필드가 없어서(계약에 없는 필드는 추가할 수 없음), 원래 자유 문자열인 `manual_verification_profile` 값을 규칙으로 재사용했습니다.
+- 작성 페이지와 조회 페이지가 다른 경우(NovaStream)의 조회 경로는 `scanners/pipeline/xss.py`의 `KNOWN_VERIFY_PATHS`(case_id -> 조회 경로) 조회 표로 해결합니다. 마찬가지로 `TargetCase` 확장 없이 스캐너 쪽에서만 아는 정보로 처리했습니다.
+- `resolve_auth_profile()`이 반환하는 값은 HTTP 헤더로 간주해 요청에 그대로 병합합니다. 계약 문서가 정확한 반환 형태를 명시하지 않아 가장 보편적인 해석을 취했습니다. 현재 모든 타겟이 `requires_pre_auth: false`라 이 경로를 실제로 타는 케이스는 아직 없습니다.
+
+#### 결과 데이터 모델 (canonical `analysis.models`)
+
+이 스캐너의 출력(`RawFinding`)은 `analysis/models.py`의 canonical pydantic 모델을 그대로 씁니다(별도 모델을 만들지 않음). 응답 본문 전체는 JSON에 넣지 않고 `context.responses_dir/<finding_id>.html`에 sidecar 파일로 저장하며(쿠키·인증 헤더·비밀번호로 보이는 패턴은 저장 전 마스킹), `findings.json` 게시 자체는 스캐너가 하지 않고 `orchestration.RunStore`가 XSS·SQLi 결과를 합쳐서 원자적으로 게시합니다.
 
 RawFinding 1건 = 요청 1번:
 
 ```json
 {
-  "case_id": "xss-discover-reflected::script-basic",
+  "case_id": "nova-discover-reflected::ai-001",
   "finding_id": "XSS-000001",
   "scanned_at": "2026-08-27T09:30:10+09:00",
   "vuln_type": "XSS",
@@ -166,8 +164,8 @@ RawFinding 1건 = 요청 1번:
 }
 ```
 
-- `case_id`는 `<매니페스트 case_id>::<payload_case_id>` 형태입니다(계약 11.3). 매니페스트의 `case_id`는 (대상 경로, 파라미터, 메서드)에 대해 실행마다 바뀌지 않습니다.
-- `rule.label`은 계약이 정한 `SUSPECTED`/`SAFE`/`null` 세 값만 사용합니다. 내부적으로는 더 세분화된 판정(그대로 반사/이스케이프되어 반사/저장 확인됨/반사 안 됨, `scanners/xss_rules.py`)을 쓰지만, 그 세부 내용은 `rule.reason`과 `response.evidence_summary` 텍스트로 남기고 공개 필드는 계약값으로 압축합니다.
+- `case_id`는 `<매니페스트 case_id>::<payload_case_id>` 형태입니다. 매니페스트의 `case_id`는 실행마다 바뀌지 않고, `payload_case_id`는 payload_profile 안에서 안정적입니다.
+- `rule.label`은 `RuleLabel.SUSPECTED`/`RuleLabel.SAFE`/`null`만 씁니다. 내부적으로는 더 세분화된 판정(그대로 반사/이스케이프되어 반사/저장 확인됨/반사 안 됨, `scanners/xss_rules.py`)을 쓰지만, 세부 내용은 `rule.reason`과 `response.evidence_summary` 텍스트로 남기고 공개 필드는 계약값으로 압축합니다.
 - 요청 자체가 실패하면(타임아웃 등) `scan.status="FAILED"`이고 `response`/`rule`은 모두 `null`, `error`에 `{code, message, retryable}`이 채워집니다. 실패한 시도도 삭제하지 않고 그대로 기록합니다.
 
 ### 5. 대시보드 실행

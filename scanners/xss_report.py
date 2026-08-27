@@ -1,10 +1,9 @@
-"""스캔 결과를 팀 공통 데이터 계약 Contract B(raw findings) 형식으로 조립한다.
+"""스캔 결과를 팀 공통 데이터 계약(canonical analysis.models) 형식으로 조립한다.
 
 scanners/xss_rules.py가 내는 세분화된 내부 판정(REFLECTED_UNSANITIZED 등)을
-docs/data-contracts-v1.md가 정한 rule.label(SUSPECTED/SAFE/null)로 압축하고,
-잃어버리는 세부 내용은 evidence_summary/reason 텍스트로 옮긴다. 또한 응답
-본문 전체를 JSON에 직접 넣지 않고 run 디렉터리 아래 sidecar HTML 파일로 저장한
-뒤, 그 상대 경로만 JSON에 남긴다(계약 4.5, "HTML 원문은 Git에 등록하지 않는다").
+공통 계약이 정한 RuleLabel(SUSPECTED/SAFE)로 압축하고, 잃어버리는 세부 내용은
+evidence_summary/reason 텍스트로 옮긴다. 또한 응답 본문 전체를 JSON에 직접
+넣지 않고 run의 sidecar HTML 파일로 저장한 뒤, 그 상대 경로만 JSON에 남긴다.
 
 scanners/pipeline/xss.py(실제 실습 환경을 대상으로 하는 계약 준수 스캐너)가
 이 모듈의 판정·조립 로직을 그대로 가져다 쓴다.
@@ -15,78 +14,60 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import requests
 
 from analysis.models import (
-    NOT_REFLECTED,
-    REFLECTED_ESCAPED,
-    REFLECTED_UNSANITIZED,
-    RULE_LABEL_SAFE,
-    RULE_LABEL_SUSPECTED,
-    STORED_XSS_CONFIRMED,
+    ErrorDetail,
     RawFinding,
-    RunEnvelope,
-    ScanError,
+    RawRun,
+    RuleLabel,
     ScanRequest,
     ScanResponse,
     ScanResult,
     ScanRule,
+    ScanStatus,
+    VulnType,
 )
-
-VULN_TYPE = "XSS"
+from scanners.xss_rules import (
+    NOT_REFLECTED,
+    REFLECTED_ESCAPED,
+    REFLECTED_UNSANITIZED,
+    STORED_XSS_CONFIRMED,
+)
 
 # 내부 판정 라벨 -> (계약 rule.label, evidence_summary, reason) 매핑.
 # evidence_summary는 "응답에서 무엇을 관찰했는가"(객관적 사실), reason은
 # "그래서 왜 이 라벨을 붙였는가"(판정 근거)로 문장의 성격을 구분한다.
 _VERDICT_TEXT = {
     NOT_REFLECTED: (
-        RULE_LABEL_SAFE,
+        RuleLabel.SAFE,
         "응답에서 페이로드가 발견되지 않았습니다.",
         "필터링되었거나 애초에 응답에 포함되지 않았습니다.",
     ),
     REFLECTED_ESCAPED: (
-        RULE_LABEL_SUSPECTED,
+        RuleLabel.SUSPECTED,
         "입력값의 특수문자가 HTML entity로 변환되어 반사되었습니다.",
         "페이로드 문자열이 이스케이프된 형태로 응답에 존재하여 후보로 수집했습니다.",
     ),
     REFLECTED_UNSANITIZED: (
-        RULE_LABEL_SUSPECTED,
+        RuleLabel.SUSPECTED,
         "입력값이 인코딩 없이 응답에 그대로 반사되었습니다.",
         "페이로드가 실행 가능한 형태로 응답에 반사되었습니다.",
     ),
     STORED_XSS_CONFIRMED: (
-        RULE_LABEL_SUSPECTED,
+        RuleLabel.SUSPECTED,
         "별도 조회 요청에서도 입력값이 인코딩 없이 그대로 남아있었습니다.",
         "페이로드가 주입 이후 별도 조회 요청에서도 유지되어 저장형 XSS로 확인되었습니다.",
     ),
 }
 
 
-def verdict_for(internal_label: str) -> tuple[str, str, str]:
+def verdict_for(internal_label: str) -> tuple[RuleLabel, str, str]:
     """내부 판정 라벨 하나를 (rule.label, evidence_summary, reason)으로 변환한다."""
     return _VERDICT_TEXT[internal_label]
-
-
-def slugify(text: str) -> str:
-    """URL 경로나 파라미터명을 case_id에 쓸 수 있는 소문자 하이픈 문자열로 바꾼다."""
-    text = text.strip("/").lower()
-    return re.sub(r"[^a-z0-9]+", "-", text).strip("-") or "root"
-
-
-def make_case_id(path: str, parameter: str, method: str) -> str:
-    """(대상 경로, 파라미터, 메서드)로부터 실행 간 안정적인 case_id를 만든다.
-
-    현재 이 스캐너는 환경 구축팀이 배포하는 공식 Contract A 타겟 매니페스트가
-    아니라 자체 xss_lab_targets 목록을 입력으로 쓰기 때문에, 외부에서 부여된
-    case_id가 없다. 대신 (경로, 파라미터, 메서드) 조합이 바뀌지 않는 한 항상
-    같은 문자열이 나오도록 결정적으로 생성해서 "실행 간 안정적"이라는 계약
-    요구사항(2.1)을 충족한다.
-    """
-    return f"xss-{slugify(path)}-{slugify(parameter)}-{method.lower()}"
 
 
 def make_finding_id(sequence_no: int) -> str:
@@ -95,7 +76,7 @@ def make_finding_id(sequence_no: int) -> str:
 
 
 def now_iso() -> str:
-    """timezone offset을 포함한 ISO 8601 문자열(계약 2.2)을 로컬 시간대로 반환한다."""
+    """timezone offset을 포함한 ISO 8601 문자열을 로컬 시간대로 반환한다."""
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
@@ -105,18 +86,18 @@ _ERROR_MAP = {
 }
 
 
-def build_scan_error(exc: Exception) -> ScanError:
+def build_scan_error(exc: Exception) -> ErrorDetail:
     """예외 하나를 계약이 정한 {code, message, retryable} 구조로 변환한다."""
     for exc_type, (code, message, retryable) in _ERROR_MAP.items():
         if isinstance(exc, exc_type):
-            return ScanError(code=code, message=f"{message} ({exc})", retryable=retryable)
+            return ErrorDetail(code=code, message=f"{message} ({exc})", retryable=retryable)
 
     if isinstance(exc, requests.RequestException):
-        return ScanError(code="SCAN_REQUEST_ERROR", message=str(exc), retryable=True)
+        return ErrorDetail(code="SCAN_REQUEST_ERROR", message=str(exc), retryable=True)
 
     # UnicodeError 등 인코딩 관련 예외. 페이로드/환경 자체의 문제라 재시도해도
     # 결과가 달라지지 않으므로 retryable=False로 표시한다.
-    return ScanError(code="SCAN_ENCODING_ERROR", message=str(exc), retryable=False)
+    return ErrorDetail(code="SCAN_ENCODING_ERROR", message=str(exc), retryable=False)
 
 
 def build_completed_scan(
@@ -129,12 +110,12 @@ def build_completed_scan(
     """정상적으로 응답을 받은 경우의 scan 객체를 만든다."""
     rule_label, evidence_summary, reason = verdict_for(internal_label)
     return ScanResult(
-        status="COMPLETED",
+        status=ScanStatus.COMPLETED,
         request=request,
         response=ScanResponse(
             http_status=http_status,
             elapsed_ms=elapsed_ms,
-            baseline_elapsed_ms=None,  # XSS는 null 허용(계약 4.4)
+            baseline_elapsed_ms=None,  # XSS는 null 허용
             evidence_summary=evidence_summary,
             html_path=html_path,
         ),
@@ -146,7 +127,7 @@ def build_completed_scan(
 def build_failed_scan(request: ScanRequest, exc: Exception) -> ScanResult:
     """요청 자체가 실패한 경우의 scan 객체를 만든다. response/rule은 모두 null."""
     return ScanResult(
-        status="FAILED",
+        status=ScanStatus.FAILED,
         request=request,
         response=ScanResponse(
             http_status=None,
@@ -165,21 +146,45 @@ def make_finding(case_id: str, finding_id: str, scan: ScanResult) -> RawFinding:
         case_id=case_id,
         finding_id=finding_id,
         scanned_at=now_iso(),
-        vuln_type=VULN_TYPE,
+        vuln_type=VulnType.XSS,
         scan=scan,
     )
 
 
 def compute_run_status(findings: list[RawFinding]) -> str:
-    """findings 목록을 보고 run 전체의 status(COMPLETED/PARTIAL/FAILED)를 계산한다(계약 5.5)."""
+    """findings 목록을 보고 run 전체의 status(COMPLETED/PARTIAL/FAILED)를 계산한다.
+
+    이 계산은 analysis.models.RawRun의 검증 규칙과 일치해야 한다: COMPLETED는
+    실패가 전혀 없어야 하고, PARTIAL은 성공·실패가 모두 있어야 하고, 그 외
+    (전부 실패했거나 findings가 비어있음)에만 FAILED를 쓸 수 있다.
+    """
     if not findings:
         return "FAILED"
-    failed = sum(1 for f in findings if f.scan.status == "FAILED")
+    failed = sum(1 for f in findings if f.scan.status is ScanStatus.FAILED)
     if failed == 0:
         return "COMPLETED"
     if failed < len(findings):
         return "PARTIAL"
     return "FAILED"
+
+
+# 저장 전 응답 본문에서 지워야 하는 민감정보 패턴(계약 11.4: "쿠키, 인증 헤더와
+# 불필요한 개인정보를 제거"). 우리 스캐너가 다루는 대상은 대부분 인증이 필요
+# 없는 페이지라 실제로 걸릴 일은 드물지만, 페이로드나 응답에 우연히 이런 패턴이
+# 섞여 들어올 가능성에 대비해 최소한의 방어선으로 둔다.
+_SECRET_PATTERNS = [
+    re.compile(r"(?im)^set-cookie:.*$"),
+    re.compile(r"(?i)authorization:\s*bearer\s+\S+"),
+    re.compile(r"(?i)\bpassword\s*=\s*[^&\s\"'<>]+"),
+]
+
+
+def _redact_secrets(html_body: str) -> str:
+    """응답 본문에서 쿠키/인증 헤더/비밀번호로 보이는 패턴을 마스킹한다."""
+    redacted = html_body
+    for pattern in _SECRET_PATTERNS:
+        redacted = pattern.sub("[REDACTED]", redacted)
+    return redacted
 
 
 def _write_atomic(path: Path, content: str) -> None:
@@ -198,21 +203,28 @@ def _write_atomic(path: Path, content: str) -> None:
     tmp_path.replace(path)
 
 
-def write_sidecar_html(run_dir: Path, finding_id: str, html: str) -> str:
-    """응답 본문 전체를 run 디렉터리 아래 responses/<finding_id>.html로 저장한다.
+def write_sidecar_html(responses_dir: Path, finding_id: str, html_body: str) -> str:
+    """응답 본문 전체를 responses_dir/<finding_id>.html로 저장한다.
 
-    반환값은 findings.json에 기록할, run 디렉터리 기준 상대 경로다(계약 4.5).
+    `responses_dir`는 호출자가 넘겨준 run 전용 증거 저장 경로(예:
+    ScanContext.responses_dir)여야 하며, 이 함수가 임의로 다른 경로를
+    계산해서는 안 된다. 반환값은 findings.json에 기록할, run 디렉터리
+    기준 상대 경로다.
     """
-    responses_dir = run_dir / "responses"
     responses_dir.mkdir(parents=True, exist_ok=True)
     file_path = responses_dir / f"{finding_id}.html"
-    _write_atomic(file_path, html)
+    _write_atomic(file_path, _redact_secrets(html_body))
     return f"responses/{finding_id}.html"
 
 
-def write_run_envelope(run_dir: Path, envelope: RunEnvelope) -> Path:
-    """RunEnvelope 전체를 <run_dir>/findings.json으로 저장한다."""
+def write_run_envelope(run_dir: Path, raw_run: RawRun) -> Path:
+    """RawRun 전체를 <run_dir>/findings.json으로 저장한다.
+
+    주의: 이건 main.py 통합 전 우리 자신의 로컬 테스트용 헬퍼다. 실제
+    파이프라인에서는 스캐너가 findings.json을 직접 게시하지 않고
+    orchestration.RunStore가 XSS·SQLi 결과를 합쳐서 게시한다.
+    """
     run_dir.mkdir(parents=True, exist_ok=True)
     findings_path = run_dir / "findings.json"
-    _write_atomic(findings_path, json.dumps(asdict(envelope), ensure_ascii=False, indent=2))
+    _write_atomic(findings_path, json.dumps(raw_run.model_dump(mode="json"), ensure_ascii=False, indent=2))
     return findings_path
