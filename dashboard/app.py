@@ -42,6 +42,41 @@ DATA_ROOT = PROJECT_ROOT / "data"
 RUN_STORE = RunStore(DATA_ROOT)
 ACTIVE_STATUSES = {"QUEUED", "RUNNING"}
 TERMINAL_STATUSES = {"COMPLETED", "PARTIAL", "FAILED"}
+DISPLAY_LABELS = {
+    "run_status": {
+        "COMPLETED": "완료",
+        "PARTIAL": "부분 완료",
+        "FAILED": "실패",
+        "QUEUED": "대기",
+        "RUNNING": "실행 중",
+    },
+    "scan_status": {"COMPLETED": "완료", "FAILED": "실패"},
+    "rule_label": {
+        "SUSPECTED": "취약 의심",
+        "SAFE": "양호",
+        "SCAN_FAILED": "스캔 실패",
+    },
+    "ai_status": {
+        "COMPLETED": "완료",
+        "NOT_REQUESTED": "미요청",
+        "FAILED": "실패",
+    },
+    "ai_label": {
+        "VULNERABLE": "취약",
+        "SAFE": "양호",
+        "INCONCLUSIVE": "판정 불가",
+        None: "미판정",
+    },
+    "ai_status_reason": {
+        "RULE_NOT_SUSPECTED": "규칙상 의심되지 않음",
+        "SCAN_FAILED": "스캔 실패",
+        "POLICY_EXCLUDED": "정책 제외",
+    },
+    "vuln_type": {
+        "XSS": "크로스 사이트 스크립팅 (XSS)",
+        "SQLI": "SQL 삽입 (SQLI)",
+    },
+}
 
 TRUSTED_CSS = """
 <style>
@@ -59,6 +94,14 @@ def _text(value: Any, fallback: str = "—") -> str:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return fallback
     return str(value)
+
+
+def _display_enum(category: str, value: Any) -> str:
+    """Translate canonical enum values only at the reviewer-facing boundary."""
+
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return DISPLAY_LABELS.get(category, {}).get(None, "—")
+    return DISPLAY_LABELS.get(category, {}).get(value, str(value))
 
 
 def _format_metric(value: Any) -> str:
@@ -97,7 +140,11 @@ def _apply_filters(df: pd.DataFrame) -> pd.DataFrame:
     filtered = df.copy()
     vuln_types = sorted(filtered["vuln_type"].unique())
     selected_types = st.sidebar.multiselect(
-        "취약점 유형", vuln_types, default=vuln_types, key="filter_vuln_types"
+        "취약점 유형",
+        vuln_types,
+        default=vuln_types,
+        key="filter_vuln_types",
+        format_func=lambda value: _display_enum("vuln_type", value),
     )
     filtered = filtered[filtered["vuln_type"].isin(selected_types)]
 
@@ -109,21 +156,27 @@ def _apply_filters(df: pd.DataFrame) -> pd.DataFrame:
         ["SUSPECTED", "SAFE", "SCAN_FAILED"],
         default=["SUSPECTED", "SAFE", "SCAN_FAILED"],
         key="filter_rule_labels",
+        format_func=lambda value: _display_enum("rule_label", value),
     )
     filtered = filtered[rule_values.isin(selected_rules)]
 
     ai_statuses = sorted(filtered["ai_status"].unique())
     selected_statuses = st.sidebar.multiselect(
-        "AI 상태", ai_statuses, default=ai_statuses, key="filter_ai_statuses"
+        "AI 상태",
+        ai_statuses,
+        default=ai_statuses,
+        key="filter_ai_statuses",
+        format_func=lambda value: _display_enum("ai_status", value),
     )
     filtered = filtered[filtered["ai_status"].isin(selected_statuses)]
 
-    ai_values = filtered["ai_label"].fillna("미판정")
+    ai_values = filtered["ai_label"]
     selected_labels = st.sidebar.multiselect(
         "AI 판정",
-        ["VULNERABLE", "SAFE", "INCONCLUSIVE", "미판정"],
-        default=["VULNERABLE", "SAFE", "INCONCLUSIVE", "미판정"],
+        ["VULNERABLE", "SAFE", "INCONCLUSIVE", None],
+        default=["VULNERABLE", "SAFE", "INCONCLUSIVE", None],
         key="filter_ai_labels",
+        format_func=lambda value: _display_enum("ai_label", value),
     )
     filtered = filtered[ai_values.isin(selected_labels)]
     review = st.sidebar.radio(
@@ -162,15 +215,29 @@ def _available_processed_results() -> list[Path]:
         result = _safe_processed_path(run_dir.name)
         if result is not None:
             results.append(result)
-    return sorted(
-        results,
-        key=lambda path: (path.parent.name, path.name),
-        reverse=True,
-    )
+
+    def sort_key(path: Path) -> tuple[int, float, str]:
+        status = RUN_STORE.load_status(path.parent.name)
+        completed_at = (
+            status.completed_at.timestamp()
+            if status.completed_at
+            else float("-inf")
+        )
+        return (
+            {"COMPLETED": 0, "PARTIAL": 1}.get(status.status.value, 2),
+            -completed_at,
+            path.parent.name,
+        )
+
+    return sorted(results, key=sort_key)
 
 
 def _processed_display_name(path: Path) -> str:
-    return f"{path.parent.name}/{path.name}"
+    status = RUN_STORE.load_status(path.parent.name)
+    return (
+        f"{path.parent.name} · {_display_enum('run_status', status.status.value)}"
+        f" · {path.name}"
+    )
 
 
 def _dark_figure(figure: Any, title: str) -> Any:
@@ -202,9 +269,16 @@ def _render_charts(df: pd.DataFrame) -> None:
             st.info("표시할 유형별 데이터가 없습니다.")
         else:
             label = _count_label_column(type_counts)
+            displayed_counts = type_counts.assign(
+                **{
+                    label: type_counts[label].map(
+                        lambda value: _display_enum("vuln_type", value)
+                    )
+                }
+            )
             st.plotly_chart(
                 _dark_figure(
-                    px.bar(type_counts, x=label, y="count", color=label),
+                    px.bar(displayed_counts, x=label, y="count", color=label),
                     "취약점 유형별 Finding",
                 ),
                 width="stretch",
@@ -213,11 +287,19 @@ def _render_charts(df: pd.DataFrame) -> None:
         if verdict_counts.empty:
             st.info("완료된 AI 판정이 없습니다.")
         else:
+            label = _count_label_column(verdict_counts)
+            displayed_counts = verdict_counts.assign(
+                **{
+                    label: verdict_counts[label].map(
+                        lambda value: _display_enum("ai_label", value)
+                    )
+                }
+            )
             st.plotly_chart(
                 _dark_figure(
                     px.pie(
-                        verdict_counts,
-                        names=_count_label_column(verdict_counts),
+                        displayed_counts,
+                        names=label,
                         values="count",
                         hole=0.55,
                     ),
@@ -229,10 +311,18 @@ def _render_charts(df: pd.DataFrame) -> None:
         if comparison.empty:
             st.info("비교할 규칙·AI 판정이 없습니다.")
         else:
+            displayed_comparison = comparison.assign(
+                rule_label=comparison["rule_label"].map(
+                    lambda value: _display_enum("rule_label", value)
+                ),
+                ai_label=comparison["ai_label"].map(
+                    lambda value: _display_enum("ai_label", value)
+                ),
+            )
             st.plotly_chart(
                 _dark_figure(
                     px.bar(
-                        comparison,
+                        displayed_comparison,
                         x="rule_label",
                         y="count",
                         color="ai_label",
@@ -263,9 +353,20 @@ def _priority_table(df: pd.DataFrame) -> pd.DataFrame:
         "confidence",
         "needs_human_review",
     ]
-    return df.assign(_priority=priorities).sort_values(["_priority", "finding_id"])[
+    table = df.assign(_priority=priorities).sort_values(["_priority", "finding_id"])[
         columns
-    ]
+    ].copy()
+    for column in (
+        "vuln_type",
+        "scan_status",
+        "rule_label",
+        "ai_status",
+        "ai_label",
+    ):
+        table[column] = table[column].map(
+            lambda value, field=column: _display_enum(field, value)
+        )
+    return table
 
 
 def _render_detail(df: pd.DataFrame) -> None:
@@ -292,7 +393,8 @@ def _render_detail(df: pd.DataFrame) -> None:
         )
     with rule_tab:
         st.write(
-            f"Scan 상태: **{_text(finding['scan_status'])}** · 규칙 판정: **{_text(finding['rule_label'])}**"
+            f"Scan 상태: **{_display_enum('scan_status', finding['scan_status'])}** · "
+            f"규칙 판정: **{_display_enum('rule_label', finding['rule_label'])}**"
         )
         st.caption("규칙 근거")
         st.code(_text(finding["rule_reason"]), language="text")
@@ -302,10 +404,15 @@ def _render_detail(df: pd.DataFrame) -> None:
             st.error(_text(finding["scan_error"]))
     with ai_tab:
         st.write(
-            f"AI 상태: **{_text(finding['ai_status'])}** · 판정: **{_text(finding['ai_label'])}** · Confidence: **{_text(finding['confidence'])}**"
+            f"AI 상태: **{_display_enum('ai_status', finding['ai_status'])}** · "
+            f"판정: **{_display_enum('ai_label', finding['ai_label'])}** · "
+            f"Confidence: **{_text(finding['confidence'])}**"
         )
         if pd.notna(finding["ai_status_reason"]):
-            st.info(f"미요청 사유: {_text(finding['ai_status_reason'])}")
+            st.info(
+                "미요청 사유: "
+                f"{_display_enum('ai_status_reason', finding['ai_status_reason'])}"
+            )
         if pd.notna(finding["ai_error"]):
             st.error(_text(finding["ai_error"]))
         for label, column in (
@@ -477,8 +584,18 @@ def _load_inputs() -> tuple[Any | None, Any | None]:
         if preferred_path in available_results
         else source_modes[0]
     )
+    if (
+        preferred_path in available_results
+        and st.session_state.get("review_preferred_run_applied") != preferred_run_id
+    ):
+        st.session_state["review_processed_mode"] = "발견된 결과 사용"
+        st.session_state["review_processed_result"] = preferred_path
+        st.session_state["review_preferred_run_applied"] = preferred_run_id
     processed_mode = st.sidebar.radio(
-        "Processed 결과", source_modes, index=source_modes.index(default_mode)
+        "Processed 결과",
+        source_modes,
+        index=source_modes.index(default_mode),
+        key="review_processed_mode",
     )
     source: Any | None
     if processed_mode == "발견된 결과 사용":
@@ -492,6 +609,7 @@ def _load_inputs() -> tuple[Any | None, Any | None]:
             available_results,
             index=index,
             format_func=_processed_display_name,
+            key="review_processed_result",
         )
     elif processed_mode == "샘플 사용":
         source = SAMPLE_PROCESSED
@@ -566,8 +684,10 @@ def _render_run_status(scan_run_id: str, *, polling: bool) -> None:
     details = {
         "Run ID": status.scan_run_id,
         "Target set": status.target_set_id,
-        "요청 유형": ", ".join(status.requested_vuln_types),
-        "상태": status.status.value,
+        "요청 유형": ", ".join(
+            _display_enum("vuln_type", value) for value in status.requested_vuln_types
+        ),
+        "상태": _display_enum("run_status", status.status.value),
         "단계": status.stage.value if status.stage else "대기 중",
         "진행": (
             f"{status.progress.completed}/{status.progress.total}"
@@ -634,7 +754,9 @@ def _render_terminal_status(status: Any) -> None:
     color = {"COMPLETED": "green", "PARTIAL": "orange", "FAILED": "red"}[
         status.status.value
     ]
-    st.markdown(f":{color}-badge[{status.status.value}]")
+    st.markdown(
+        f":{color}-badge[{_display_enum('run_status', status.status.value)}]"
+    )
     st.write(status_text)
     _render_run_status(status.scan_run_id, polling=False)
     processed_path = _safe_processed_path(status.scan_run_id)
@@ -666,7 +788,9 @@ def _render_execution_tab() -> None:
         except (FileNotFoundError, ValueError):
             st.session_state.pop("scan_run_id", None)
     if status is not None and status.status.value in ACTIVE_STATUSES:
-        st.markdown(f":blue-badge[{status.status.value}]")
+        st.markdown(
+            f":blue-badge[{_display_enum('run_status', status.status.value)}]"
+        )
         st.caption("실행 중에는 설정을 변경할 수 없습니다.")
 
         @st.fragment(run_every=2)
@@ -777,7 +901,8 @@ def _render_review_tab() -> None:
         f"시작 {metadata['started_at']} · 완료 {_text(metadata['completed_at'])}"
     )
     status.markdown(
-        f":{'red' if run.status.value == 'FAILED' else 'orange' if run.status.value == 'PARTIAL' else 'green'}-badge[{run.status.value}]"
+        f":{'red' if run.status.value == 'FAILED' else 'orange' if run.status.value == 'PARTIAL' else 'green'}-badge["
+        f"{_display_enum('run_status', run.status.value)}]"
     )
 
     if run.status.value == "FAILED":
@@ -794,12 +919,16 @@ def _render_review_tab() -> None:
         else:
             st.dataframe(errors, hide_index=True, width="stretch")
         st.stop()
-    if run.status.value == "PARTIAL":
-        st.warning(
-            "PARTIAL 실행입니다. 실패 또는 제외된 Finding을 확인한 뒤 결과를 검토하세요."
-        )
-
     findings = findings_to_dataframe(run)
+    if run.status.value == "PARTIAL":
+        full_summary = build_summary(findings)
+        st.warning(
+            "부분 완료 실행입니다. 필터 적용 전 전체 Finding 기준 · "
+            f"스캔 실패 {full_summary['scan_failed']}건 · "
+            f"AI 미요청 {full_summary['ai_not_requested']}건 · "
+            f"AI 실패 {full_summary['ai_failed']}건 · "
+            f"수동 검토 필요 {full_summary['needs_human_review']}건"
+        )
     filtered = _apply_filters(findings)
     if findings.empty:
         st.info("이 실행에는 처리된 Finding이 없습니다. 0건 요약과 빈 Excel 초안을 제공합니다.")

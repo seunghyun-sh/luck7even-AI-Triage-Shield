@@ -9,11 +9,24 @@ import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from dashboard.app import _build_filtered_evaluation, _report_frame
+from dashboard.app import (
+    _available_processed_results,
+    _build_filtered_evaluation,
+    _display_enum,
+    _priority_table,
+    _processed_display_name,
+    _report_frame,
+)
 from dashboard.data_loader import (
     findings_to_dataframe,
     load_ground_truth,
     load_processed_data,
+)
+from dashboard.metrics import (
+    build_ai_verdict_counts,
+    build_rule_ai_comparison,
+    build_summary,
+    build_type_counts,
 )
 from orchestration.models import ExecutionStage, ExecutionStatus, RunError, RunRequest
 from orchestration.run_store import RunStore
@@ -133,7 +146,7 @@ def test_active_run_is_rediscovered_and_hides_setup_controls() -> None:
 
             assert not app.exception
             assert not any(selectbox.label == "허가된 대상 manifest" for selectbox in app.selectbox)
-            assert any("QUEUED" in markdown.value for markdown in app.markdown)
+            assert any("대기" in markdown.value for markdown in app.markdown)
             assert any(
                 status.scan_run_id in str(element.value) for element in app.get("json")
             )
@@ -416,3 +429,109 @@ def test_dashboard_distinguishes_zero_run_from_filter_reset() -> None:
         results_path.unlink()
         results_path.parent.rmdir()
         shutil.rmtree(PROCESSED_PATH.parent / "runs" / initial.scan_run_id)
+
+
+def test_discovery_prefers_completed_and_honors_preferred_partial() -> None:
+    store = RunStore(PROCESSED_PATH.parent)
+    completed = store.create_run(
+        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+    )
+    partial = store.create_run(
+        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+    )
+    completed_path = _write_processed_run(store, completed, ExecutionStatus.COMPLETED)
+    partial_path = _write_processed_run(store, partial, ExecutionStatus.PARTIAL)
+    try:
+        _terminal_run(store, completed, ExecutionStatus.COMPLETED)
+        _terminal_run(store, partial, ExecutionStatus.PARTIAL)
+
+        discovered = _available_processed_results()
+        assert (
+            store.load_status(partial.scan_run_id).completed_at
+            > store.load_status(completed.scan_run_id).completed_at
+        )
+        assert discovered.index(completed_path) < discovered.index(partial_path)
+        assert "완료" in _processed_display_name(completed_path)
+        assert "부분 완료" in _processed_display_name(partial_path)
+
+        app = _review(AppTest.from_file(str(APP_PATH)).run(timeout=30))
+        result_selectbox = next(
+            selectbox
+            for selectbox in app.selectbox
+            if selectbox.label == "발견된 결과 파일"
+        )
+        assert result_selectbox.value == completed_path
+
+        app.session_state["review_scan_run_id"] = partial.scan_run_id
+        app = _review(app.run(timeout=30))
+        result_selectbox = next(
+            selectbox
+            for selectbox in app.selectbox
+            if selectbox.label == "발견된 결과 파일"
+        )
+        assert result_selectbox.value == partial_path
+    finally:
+        completed_path.unlink()
+        completed_path.parent.rmdir()
+        partial_path.unlink()
+        partial_path.parent.rmdir()
+        shutil.rmtree(PROCESSED_PATH.parent / "runs" / completed.scan_run_id)
+        shutil.rmtree(PROCESSED_PATH.parent / "runs" / partial.scan_run_id)
+
+
+def test_reviewer_enum_mapping_preserves_canonical_filter_and_aggregation_inputs() -> None:
+    findings = findings_to_dataframe(load_processed_data(SAMPLE_PATH))
+    canonical = findings.copy(deep=True)
+    before_counts = (
+        build_type_counts(findings),
+        build_ai_verdict_counts(findings),
+        build_rule_ai_comparison(findings),
+    )
+
+    table = _priority_table(findings)
+
+    pd.testing.assert_frame_equal(findings, canonical)
+    pd.testing.assert_frame_equal(build_type_counts(findings), before_counts[0])
+    pd.testing.assert_frame_equal(build_ai_verdict_counts(findings), before_counts[1])
+    pd.testing.assert_frame_equal(build_rule_ai_comparison(findings), before_counts[2])
+    assert set(findings["vuln_type"]) == {"XSS", "SQLI"}
+    assert "크로스 사이트 스크립팅 (XSS)" in set(table["vuln_type"])
+    assert "완료" in set(table["scan_status"])
+    assert "취약 의심" in set(table["rule_label"])
+    assert "미요청" in set(table["ai_status"])
+    assert "미판정" in set(table["ai_label"])
+    assert (
+        _display_enum("ai_status_reason", "RULE_NOT_SUSPECTED")
+        == "규칙상 의심되지 않음"
+    )
+
+
+def test_partial_banner_uses_unfiltered_full_run_counts() -> None:
+    findings = findings_to_dataframe(load_processed_data(SAMPLE_PATH))
+    summary = build_summary(findings)
+    app = _review(AppTest.from_file(str(APP_PATH)).run(timeout=30))
+    warning = next(
+        element.value
+        for element in app.warning
+        if "필터 적용 전 전체 Finding 기준" in element.value
+    )
+
+    vuln_type_filter = next(
+        multiselect
+        for multiselect in app.multiselect
+        if multiselect.label == "취약점 유형"
+    )
+    app = vuln_type_filter.set_value(["XSS"]).run(timeout=30)
+    filtered_warning = next(
+        element.value
+        for element in app.warning
+        if "필터 적용 전 전체 Finding 기준" in element.value
+    )
+    expected_counts = (
+        f"스캔 실패 {summary['scan_failed']}건 · "
+        f"AI 미요청 {summary['ai_not_requested']}건 · "
+        f"AI 실패 {summary['ai_failed']}건 · "
+        f"수동 검토 필요 {summary['needs_human_review']}건"
+    )
+    assert expected_counts in warning
+    assert filtered_warning == warning
