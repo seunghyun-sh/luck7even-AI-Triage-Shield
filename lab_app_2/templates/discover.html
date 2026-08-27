@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}키워드 탐색 | NovaStream{% endblock %}
+{% block content %}
+  <section class="page-shell narrow-shell">
+    <p class="eyebrow">DISCOVER</p>
+    <h1>키워드로 탐색</h1>
+    <p class="page-intro">보고 싶은 분위기나 키워드를 입력해 보세요.</p>
+
+    <form class="search-form" method="get">
+      <label for="discover-q">탐색 키워드</label>
+      <div class="search-row">
+        <input id="discover-q" name="q" value="{{ query }}" placeholder="예: 긴장감 있는 밤" autocomplete="off">
+        <button class="button primary" type="submit">탐색</button>
+      </div>
+    </form>
+
+    {% if query %}
+      <section class="discovery-result">
+        <span>추천 키워드</span>
+        <!-- INTENTIONALLY VULNERABLE: reflected XSS scanner target. -->
+        <h2 id="reflected-result">{{ query | safe }}</h2>
+        <p>이 키워드를 바탕으로 큐레이션을 준비하고 있습니다.</p>
+      </section>
+    {% endif %}
+  </section>
+{% endblock %}

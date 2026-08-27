@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="NovaStream 보안 스캐너 검증용 OTT 카탈로그">
+    <title>{% block title %}NovaStream{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="{{ url_for('index') }}">NOVA<span>STREAM</span></a>
+      <nav aria-label="주요 메뉴">
+        <a href="{{ url_for('index') }}">홈</a>
+        <a href="{{ url_for('catalog') }}">콘텐츠</a>
+        <a href="{{ url_for('discover') }}">검색</a>
+        <a class="admin-link" href="{{ url_for('admin_dashboard') }}">운영자</a>
+      </nav>
+    </header>
+    <main>{% block content %}{% endblock %}</main>
+    <footer>
+      <strong>NovaStream Security Lab</strong>
+      <span>격리된 교육·스캐너 검증 환경에서만 사용하세요.</span>
+    </footer>
+  </body>
+</html>

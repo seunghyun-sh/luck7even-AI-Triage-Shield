@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}콘텐츠 없음 | NovaStream{% endblock %}
+{% block content %}
+  <section class="page-shell narrow-shell empty-page">
+    <p class="eyebrow">404 NOT FOUND</p>
+    <h1>콘텐츠를 찾을 수 없습니다.</h1>
+    <a class="button primary" href="{{ url_for('catalog') }}">카탈로그로 돌아가기</a>
+  </section>
+{% endblock %}

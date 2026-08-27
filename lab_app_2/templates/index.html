@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="hero">
+    <div class="hero-copy">
+      <p class="eyebrow">NOVASTREAM ORIGINAL</p>
+      <h1>우주의 경계</h1>
+      <p>태양계 끝에서 발견된 신호. 돌아올 수 없는 항로를 선택한 탐사대의 이야기.</p>
+      <div class="hero-actions">
+        <a class="button primary" href="{{ url_for('catalog') }}">콘텐츠 둘러보기</a>
+        <span class="lab-badge">SECURITY LAB</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="catalog-section" id="catalog">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">TRENDING NOW</p>
+        <h2>지금 인기 있는 콘텐츠</h2>
+      </div>
+      <span>{{ titles | length }}개의 가상 콘텐츠</span>
+    </div>
+    <div class="poster-grid">
+      {% for title in titles %}
+        <a class="poster-card" href="{{ url_for('title_detail', title_id=title.id) }}">
+          <div class="poster poster-{{ title.accent }}">
+            <span class="poster-mark">N</span>
+            <p>{{ title.name }}</p>
+          </div>
+          <div class="poster-meta">
+            <h3>{{ title.name }}</h3>
+            <p>{{ title.year }} · {{ title.genre }} · {{ title.rating }}</p>
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  </section>
+{% endblock %}
