@@ -80,7 +80,7 @@ MVP에서는 payload 직접 입력, 임의 URL, 동시 실행 수와 AI 모델�
 - manifest의 `base_url`에만 `/health`를 붙여 GET 요청하고, 1초 이하 timeout, redirect 금지, 인증정보 미전송으로 HTTP `200`만 준비 상태로 판단한다. 응답 본문과 네트워크 예외 원문은 저장하거나 표시하지 않는다.
 - 선택한 모든 진단 유형이 manifest에 존재하고, 해당 scanner의 `scan` callable 및 `analysis.ai_triage.triage` callable이 있어야 한다.
 - 전역 pipeline lock이 비활성이며 data root에 쓸 수 있어야 한다.
-- 하나라도 차단되면 대시보드는 원인별 안전한 안내를 표시하고 실행 버튼을 비활성화한다. 버튼 활성화에는 사전점검 READY, 하나 이상의 진단 유형 선택, 격리·허가 확인 checkbox가 모두 필요하다.
+- 하나라도 차단되면 대시보드는 원인별 안전한 안내를 표시하고 실행 버튼을 비활성화한다. 버튼 활성화에는 현재 선택 manifest 경로와 유형 fingerprint에 대응하는 사전점검 READY, 하나 이상의 진단 유형 선택, 격리·허가 확인 checkbox, active run 부재가 모두 필요하다. 입력이 바뀌면 이전 사전점검은 stale이며, launch click 직전에 다시 점검해 READY가 아니면 `start_run`을 호출하지 않는다.
 
 ## 5. Python 실행 인터페이스
 
@@ -420,19 +420,19 @@ data/runs/.pipeline.lock
 
 오류 메시지에 API 키, 쿠키, 인증 헤더, 실제 고정 IP, 응답 HTML 원문과 로컬 절대 경로를 포함하지 않는다.
 
-## 15. 대시보드 진단 실행 탭 계약
+## 15. 대시보드 진단 실행 view 계약
 
-대시보드는 다음 순서로 동작한다.
+대시보드는 `진단 실행`과 `결과 검토` navigation view를 제공하며 선택된 view만 렌더한다. 첫 방문은 진단 실행 view다. 실행 view는 다음 순서로 동작한다.
 
 1. 등록된 target manifest 목록을 표시한다.
 2. XSS·SQLi 진단 유형을 선택한다.
 3. 허가된 격리 환경임을 확인하는 체크를 요구한다.
 4. 실행 버튼을 한 번 누르면 `start_run`을 한 번만 호출한다.
-5. 반환된 `scan_run_id`를 session state에 보관한다.
-6. `status.json`을 일정 간격으로 읽어 상태, 단계와 진행률을 표시한다.
+5. 반환된 `scan_run_id`는 session state의 현재 선택 hint로만 보관한다. active run의 authoritative source는 RunStore이며 새로고침 뒤에도 재발견한다.
+6. ACTIVE (`QUEUED`, `RUNNING`)에서만 `status.json`을 일정 간격으로 읽어 run ID, target set, 요청 유형, 상태, 단계, 진행률과 updated_at을 읽기 전용으로 표시한다.
 7. terminal 상태가 되면 polling을 중단한다.
-8. `COMPLETED`·`PARTIAL`이고 processed 경로가 있으면 결과 검토 화면에서 해당 run을 선택한다.
-9. `FAILED`이면 구조화된 오류만 표시하고 결과 화면으로 이동하지 않는다.
+8. `COMPLETED`·`PARTIAL`이고 canonical `processed/<scan_run_id>/results.json` artifact가 실제로 안전하게 존재할 때만 명시적 결과 검토 CTA를 표시한다. CTA callback은 다음 rerun 전에 navigation을 결과 검토 view로 바꾸고 해당 `scan_run_id`를 persistent review selection state에 저장한다. review 진입 시 artifact를 다시 검증한다.
+9. `FAILED`와 artifact unavailable은 결과 검토 CTA가 없으며 자동으로 view를 이동하지 않는다. `새 진단 준비`는 session selection만 정리하고 RunStore artifact를 삭제하지 않는다.
 
 버튼을 여러 번 누르거나 브라우저를 새로고침해도 같은 요청이 중복 실행되지 않도록 lock과 현재 run 상태를 확인한다.
 
@@ -461,7 +461,7 @@ data/runs/.pipeline.lock
 - 등록 대상만 선택할 수 있다.
 - 실행 중 버튼 중복 요청을 막는다.
 - 상태와 단계·진행률을 구분해 표시한다.
-- terminal 결과만 결과 검토 화면에 연결한다.
+- canonical artifact가 있는 COMPLETED·PARTIAL만 CTA 기반으로 결과 검토 화면에 연결한다.
 - 임의 URL, 인증정보와 내부 예외를 화면에 노출하지 않는다.
 
 ## 17. 스캐너팀 확인 요청 사항

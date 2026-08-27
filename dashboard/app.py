@@ -444,10 +444,16 @@ def _load_inputs() -> tuple[Any | None, Any | None]:
         if available_results
         else ("샘플 사용", "JSON 업로드")
     )
+    preferred_run_id = st.session_state.get("review_scan_run_id")
+    preferred_path = None
+    if preferred_run_id:
+        try:
+            preferred_path = _safe_processed_path(RUN_STORE.load_status(preferred_run_id))
+        except (FileNotFoundError, ValueError):
+            pass
     default_mode = (
         "발견된 결과 사용"
-        if st.session_state.pop("review_prefer_discovered_result", False)
-        and available_results
+        if preferred_path in available_results
         else source_modes[0]
     )
     processed_mode = st.sidebar.radio(
@@ -455,7 +461,6 @@ def _load_inputs() -> tuple[Any | None, Any | None]:
     )
     source: Any | None
     if processed_mode == "발견된 결과 사용":
-        preferred_path = st.session_state.pop("review_preferred_result_path", None)
         index = (
             available_results.index(preferred_path)
             if preferred_path in available_results
@@ -551,33 +556,124 @@ def _render_run_status(scan_run_id: str, *, polling: bool) -> None:
         st.warning("실행 상태를 읽을 수 없습니다.")
         return
 
-    st.write(f"상태: **{status.status.value}**")
-    st.write(f"단계: **{status.stage.value if status.stage else '대기 중'}**")
-    st.progress(
-        status.progress.completed / status.progress.total
-        if status.progress.total
-        else 0,
-        text=f"진행률: {status.progress.completed}/{status.progress.total}",
-    )
-    if status.status.value in {"COMPLETED", "PARTIAL"}:
-        processed_path = _safe_processed_path(status)
-        if processed_path is not None:
-            st.session_state["review_prefer_discovered_result"] = True
-            st.session_state["review_preferred_result_path"] = processed_path
-            st.success("처리 결과를 결과 검토 탭에서 선택했습니다.")
-        else:
-            st.warning("검토에 사용할 안전한 처리 결과를 찾을 수 없습니다.")
-    elif status.status.value == "FAILED":
-        if status.error is not None:
-            st.error(f"{status.error.code}: {status.error.message}")
-        else:
-            st.error("실행이 실패했습니다.")
+    details = {
+        "Run ID": status.scan_run_id,
+        "Target set": status.target_set_id,
+        "요청 유형": ", ".join(status.requested_vuln_types),
+        "상태": status.status.value,
+        "단계": status.stage.value if status.stage else "대기 중",
+        "진행": (
+            f"{status.progress.completed}/{status.progress.total}"
+            if status.progress.total
+            else "전체 건수 계산 중"
+        ),
+        "업데이트": status.updated_at.isoformat(),
+    }
+    st.json(details, expanded=False)
+    if status.progress.total:
+        st.progress(
+            status.progress.completed / status.progress.total,
+            text=f"진행률: {status.progress.completed}/{status.progress.total}",
+        )
+    else:
+        st.caption("진행률: 전체 건수 계산 중")
     if polling and status.status.value in TERMINAL_STATUSES:
         st.rerun()
 
 
+def _set_review_selection(scan_run_id: str) -> None:
+    """Navigate only when the published artifact is still safe to review."""
+
+    try:
+        status = RUN_STORE.load_status(scan_run_id)
+    except (FileNotFoundError, ValueError):
+        return
+    if _safe_processed_path(status) is None:
+        return
+    st.session_state["review_scan_run_id"] = scan_run_id
+    st.session_state["dashboard_view"] = "결과 검토"
+
+
+def _set_execution_view() -> None:
+    st.session_state["dashboard_view"] = "진단 실행"
+
+
+def _clear_run_selection() -> None:
+    st.session_state.pop("scan_run_id", None)
+
+
+def _preflight_fingerprint(selected_path: Path, selected_types: list[str]) -> tuple[str, tuple[str, ...]]:
+    return (str(selected_path), tuple(sorted(selected_types)))
+
+
+def _render_readiness(preflight: Any) -> None:
+    ready_checks = [
+        check for check in preflight.checks if check.readiness is Readiness.READY
+    ]
+    blockers = [
+        check for check in preflight.checks if check.readiness is not Readiness.READY
+    ]
+    st.markdown(f"**준비 {len(ready_checks)} · 차단 {len(blockers)}**")
+    for check in blockers:
+        st.caption(f"차단 · {check.name}: {check.message} ({check.code})")
+    if ready_checks:
+        with st.expander(f"통과 항목 {len(ready_checks)}"):
+            for check in ready_checks:
+                st.caption(f"{check.name}: {check.message} ({check.code})")
+
+
+def _render_terminal_status(status: Any) -> None:
+    status_text = {
+        "COMPLETED": "진단이 완료되었습니다. 게시된 결과를 검토할 수 있습니다.",
+        "PARTIAL": "진단이 일부 완료되었습니다. 게시된 부분 결과를 검토할 수 있습니다.",
+        "FAILED": "진단이 실패했습니다. 결과 검토로 전달하지 않습니다.",
+    }[status.status.value]
+    color = {"COMPLETED": "green", "PARTIAL": "orange", "FAILED": "red"}[
+        status.status.value
+    ]
+    st.markdown(f":{color}-badge[{status.status.value}]")
+    st.write(status_text)
+    _render_run_status(status.scan_run_id, polling=False)
+    processed_path = _safe_processed_path(status)
+    if processed_path is not None:
+        label = "이 결과 검토" if status.status.value == "COMPLETED" else "부분 결과 검토"
+        st.button(
+            label,
+            type="primary",
+            on_click=_set_review_selection,
+            args=(status.scan_run_id,),
+        )
+    elif status.status.value != "FAILED":
+        st.warning("검토에 사용할 안전한 processed 결과를 찾을 수 없습니다.")
+    if status.status.value == "FAILED" and status.error is not None:
+        st.caption(f"{status.error.code}: {status.error.message}")
+    st.button("새 진단 준비", on_click=_clear_run_selection)
+
+
 def _render_execution_tab() -> None:
     st.subheader("진단 실행")
+    active_run_id = _active_run_id()
+    selected_run_id = active_run_id or st.session_state.get("scan_run_id")
+    status = None
+    if selected_run_id:
+        try:
+            status = RUN_STORE.load_status(selected_run_id)
+        except (FileNotFoundError, ValueError):
+            st.session_state.pop("scan_run_id", None)
+    if status is not None and status.status.value in ACTIVE_STATUSES:
+        st.markdown(f":blue-badge[{status.status.value}]")
+        st.caption("실행 중에는 설정을 변경할 수 없습니다.")
+
+        @st.fragment(run_every=2)
+        def active_status_fragment() -> None:
+            _render_run_status(status.scan_run_id, polling=True)
+
+        active_status_fragment()
+        return
+    if status is not None and status.status.value in TERMINAL_STATUSES:
+        _render_terminal_status(status)
+        return
+
     manifests = _available_target_manifests()
     if not manifests:
         st.error("검증된 대상 manifest가 없습니다.")
@@ -585,65 +681,82 @@ def _render_execution_tab() -> None:
 
     paths = [path for path, _ in manifests]
     manifest_names = {path: manifest.target_set_id for path, manifest in manifests}
-    selected_path = st.selectbox(
-        "허가된 대상 manifest",
-        paths,
-        format_func=lambda path: f"{path.name} · {manifest_names[path]}",
-    )
-    selected_types = st.multiselect("진단 유형", ("XSS", "SQLI"))
-    acknowledged = st.checkbox("격리되고 허가된 진단 환경임을 확인했습니다.")
-    st.markdown("#### 실행 준비 상태")
-    st.button("준비 상태 새로고침")
-    preflight = run_preflight(
-        dict(manifests)[selected_path],
-        selected_types,
-        DATA_ROOT,
-    )
-    for check in preflight.checks:
-        line = f"**{check.name}** · {check.message} (`{check.code}`)"
-        if check.readiness is Readiness.READY:
-            st.success(line)
+    setup_card, readiness_card = st.columns([3, 2])
+    with setup_card, st.container(border=True):
+        selected_path = st.selectbox(
+            "허가된 대상 manifest",
+            paths,
+            format_func=lambda path: f"{path.name} · {manifest_names[path]}",
+            key="execution_manifest_path",
+        )
+        selected_types = st.multiselect(
+            "진단 유형", ("XSS", "SQLI"), key="execution_types"
+        )
+        acknowledged = st.checkbox(
+            "격리되고 허가된 진단 환경임을 확인했습니다.",
+            key="execution_authorized",
+        )
+        fingerprint = _preflight_fingerprint(selected_path, selected_types)
+        cached = st.session_state.get("execution_preflight")
+        preflight = (
+            cached["result"]
+            if cached and cached["fingerprint"] == fingerprint
+            else None
+        )
+        if not selected_types:
+            disabled_reason = "진단 유형을 선택하세요."
+        elif not acknowledged:
+            disabled_reason = "격리·허가 확인이 필요합니다."
+        elif preflight is None:
+            disabled_reason = "준비 확인이 필요합니다."
+        elif not preflight.ready:
+            disabled_reason = "차단 항목을 해결하세요."
         else:
-            st.error(line)
-
-    scan_run_id = st.session_state.get("scan_run_id")
-    active_run_id = _active_run_id()
-    active = active_run_id is not None
-    if active_run_id is not None:
-        scan_run_id = active_run_id
-        st.session_state["scan_run_id"] = active_run_id
-    elif scan_run_id:
-        try:
-            RUN_STORE.load_status(scan_run_id)
-        except (FileNotFoundError, ValueError):
-            st.session_state.pop("scan_run_id", None)
-            scan_run_id = None
-    if st.button(
-        "진단 실행 시작",
-        disabled=not (preflight.ready and selected_types and acknowledged) or active,
-    ):
-        try:
-            st.session_state["scan_run_id"] = start_run(
-                selected_path.relative_to(PROJECT_ROOT), selected_types
+            disabled_reason = ""
+        if st.button("진단 실행 시작", type="primary", disabled=bool(disabled_reason)):
+            fresh = run_preflight(
+                dict(manifests)[selected_path], selected_types, DATA_ROOT
             )
-        except RunLaunchError as error:
-            st.error(str(error))
-        else:
+            st.session_state["execution_preflight"] = {
+                "fingerprint": fingerprint,
+                "result": fresh,
+            }
+            if not fresh.ready:
+                st.rerun()
+            else:
+                try:
+                    st.session_state["scan_run_id"] = start_run(
+                        selected_path.relative_to(PROJECT_ROOT), selected_types
+                    )
+                except RunLaunchError as error:
+                    st.error(str(error))
+                else:
+                    st.rerun()
+        if disabled_reason:
+            st.caption(disabled_reason)
+    with readiness_card, st.container(border=True):
+        st.markdown("#### 실행 준비 상태")
+        if st.button("준비 상태 확인/새로고침"):
+            result = run_preflight(
+                dict(manifests)[selected_path], selected_types, DATA_ROOT
+            )
+            st.session_state["execution_preflight"] = {
+                "fingerprint": fingerprint,
+                "result": result,
+            }
             st.rerun()
-
-    scan_run_id = st.session_state.get("scan_run_id") or active_run_id
-    if not scan_run_id:
-        return
-    polling = scan_run_id == active_run_id
-
-    @st.fragment(run_every=2 if polling else None)
-    def status_fragment() -> None:
-        _render_run_status(scan_run_id, polling=polling)
-
-    status_fragment()
+        if preflight is None:
+            st.caption("선택한 manifest와 진단 유형의 준비 상태를 확인하세요.")
+        else:
+            _render_readiness(preflight)
 
 
 def _render_review_tab() -> None:
+    active_run_id = _active_run_id()
+    if active_run_id:
+        banner, action = st.columns([5, 1])
+        banner.info(f"진단 {active_run_id}이 실행 중입니다.")
+        action.button("실행 상태 보기", on_click=_set_execution_view)
     run, ground_truth = _load_inputs()
     if run is None:
         return
@@ -736,10 +849,16 @@ def _render_review_tab() -> None:
 def main() -> None:
     st.set_page_config(page_title="Triage Shield | 검토 대시보드", layout="wide")
     st.markdown(TRUSTED_CSS, unsafe_allow_html=True)
-    execution_tab, review_tab = st.tabs(["진단 실행", "결과 검토"])
-    with execution_tab:
+    st.session_state.setdefault("dashboard_view", "진단 실행")
+    view = st.segmented_control(
+        "대시보드 보기",
+        ("진단 실행", "결과 검토"),
+        key="dashboard_view",
+        label_visibility="collapsed",
+    )
+    if view == "진단 실행":
         _render_execution_tab()
-    with review_tab:
+    elif view == "결과 검토":
         _render_review_tab()
 
 
