@@ -4,24 +4,31 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# Rule-based first-pass verdict labels (`rule_label`), ordered by severity.
+NOT_REFLECTED = "NOT_REFLECTED"
+REFLECTED_ESCAPED = "REFLECTED_ESCAPED"
+REFLECTED_UNSANITIZED = "REFLECTED_UNSANITIZED"
+
 
 @dataclass
-class ReflectionFinding:
-    """One payload x target result from a reflection-based scan (e.g. XSS)."""
+class Finding:
+    """One rule-verdict record produced by a scanner, ready for `data/raw/`."""
 
-    target_url: str
+    finding_id: str
+    vuln_type: str
+    url: str
+    parameter: str
     payload: str
-    is_reflected: bool
-    response_snippet: str
+    rule_label: str
+    response_body: str
 
-    def to_row(self) -> dict:
+    def to_dict(self) -> dict:
         return {
-            "target_url": self.target_url,
+            "finding_id": self.finding_id,
+            "vuln_type": self.vuln_type,
+            "url": self.url,
+            "parameter": self.parameter,
             "payload": self.payload,
-            "is_reflected": self.is_reflected,
-            "response_snippet": self.response_snippet,
+            "rule_label": self.rule_label,
+            "response_body": self.response_body,
         }
-
-    @staticmethod
-    def fieldnames() -> list[str]:
-        return ["target_url", "payload", "is_reflected", "response_snippet"]

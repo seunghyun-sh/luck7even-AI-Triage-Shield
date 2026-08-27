@@ -32,7 +32,8 @@ XSS와 SQL Injection 진단 결과를 수집하고, 규칙 기반 1차 판정과
 │   ├── xss_config.py      # XSS 스캐너 설정(호스트/계정/타겟 목록) 로딩
 │   ├── xss_payloads.py    # AI 페이로드 생성 + 캐시 조회/저장
 │   ├── payload_cache.py   # 범용 페이로드 캐시 파일 입출력
-│   └── xss.py             # XSS 스캔 오케스트레이션(로그인 → 스캔 → CSV)
+│   ├── xss_rules.py       # 반사 여부 규칙 기반 판정(rule_label)
+│   └── xss.py             # XSS 스캔 오케스트레이션(로그인 → 스캔 → JSON Lines)
 ├── tests/                 # 자동화 테스트
 ├── .env.example
 ├── main.py                # 로컬 통합 실행 진입점
@@ -87,7 +88,23 @@ python scanners/xss.py --targets configs/xss_lab_targets.example.json
 - `--count`: 캐시가 없을 때 AI에게 요청할 페이로드 개수 (기본 100)
 - `--refresh-payloads`: 캐시를 무시하고 AI 페이로드를 새로 생성
 - `--payload-cache`: 캐시 파일 경로 (기본 `data/raw/xss_ai_payloads.json`)
-- `--output`: 결과 CSV 저장 경로 (기본 `data/raw/raw-findings-xss-multi.csv`)
+- `--output`: 결과 JSON Lines 저장 경로 (기본 `data/raw/raw-findings-xss.jsonl`)
+
+각 페이로드는 파라미터/헤더(`firstname`, `lastname`, ..., `User-Agent`, `Referer`, `bWAPP`)마다 한 번씩 개별적으로 주입되어, 어떤 파라미터가 실제로 반사됐는지 결과에서 정확히 구분할 수 있습니다. 대신 요청 수는 (URL × 페이로드 × 파라미터/헤더 수)만큼 늘어나므로, 대상이 많거나 `--count`를 크게 잡으면 스캔 시간이 길어집니다.
+
+결과 파일(`data/raw/raw-findings-xss.jsonl`)은 한 줄에 finding 하나씩 JSON으로 저장되며, 각 레코드는 다음 필드를 가집니다.
+
+| 필드 | 설명 |
+| --- | --- |
+| `finding_id` | 발견된 취약점 고유 ID (UUID) |
+| `vuln_type` | 취약점 종류 (`XSS`) |
+| `url` | 공격 대상 URL |
+| `parameter` | 공격에 사용된 파라미터명(헤더명 포함) |
+| `payload` | 실제 주입한 공격 페이로드 |
+| `rule_label` | 1차 탐지 결과: `REFLECTED_UNSANITIZED`(그대로 반사=취약) / `REFLECTED_ESCAPED`(HTML 이스케이프되어 반사=안전) / `NOT_REFLECTED`(반사 안 됨) |
+| `response_body` | 공격 후 돌아온 HTML 또는 에러 메시지 원본 텍스트 전체 |
+
+`response_body`는 응답 전체를 그대로 담기 때문에, 대상이 많거나 응답이 큰 경우 결과 파일 용량이 커질 수 있습니다.
 
 ### 5. 대시보드 실행
 

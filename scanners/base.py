@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import quote
@@ -56,3 +57,13 @@ def write_csv(path: str | Path, rows: list[dict], fieldnames: list[str]) -> None
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def write_jsonl(path: str | Path, rows: list[dict]) -> None:
+    """Write scan result rows as JSON Lines, creating parent directories as needed."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False))
+            f.write("\n")

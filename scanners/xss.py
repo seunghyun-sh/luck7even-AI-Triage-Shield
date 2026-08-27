@@ -1,8 +1,11 @@
 """bWAPP XSS reflection scanner.
 
-Logs into the lab app, replays each AI-assisted payload against every
-configured target (as both GET and POST, plus commonly-injectable headers),
-and records whether the payload was reflected verbatim in the response.
+Logs into the lab app, then replays each AI-assisted payload against every
+configured target through one attack vector at a time -- one of
+INJECTABLE_PARAMS or INJECTABLE_HEADERS -- so each finding can be attributed
+to the single parameter/header that carried the payload. Every finding gets
+a rule-based verdict (`rule_label`) from `xss_rules.classify_reflection` and
+is written to `data/raw/` as JSON Lines.
 
 Run as a script (`python scanners/xss.py`) or as a module
 (`python -m scanners.xss`); both work thanks to the path bootstrap below.
@@ -12,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import uuid
 from pathlib import Path
 
 if __name__ == "__main__" and __package__ is None:  # `python scanners/xss.py`
@@ -20,18 +24,22 @@ if __name__ == "__main__" and __package__ is None:  # `python scanners/xss.py`
 import requests
 from dotenv import load_dotenv
 
-from analysis.models import ReflectionFinding
-from scanners import base, xss_payloads
+from analysis.models import Finding
+from scanners import base, xss_payloads, xss_rules
 from scanners.xss_config import INJECTABLE_HEADERS, INJECTABLE_PARAMS, LOGIN_PATH, load_config
 
-DEFAULT_OUTPUT = Path("data/raw/raw-findings-xss-multi.csv")
+VULN_TYPE = "XSS"
+DEFAULT_OUTPUT = Path("data/raw/raw-findings-xss.jsonl")
+# Baseline fields most bWAPP XSS cases need present to actually process the
+# request, independent of which single field carries the test payload.
+FORM_TRIGGERS = {"action": "add", "form": "submit"}
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the bWAPP XSS reflection scan.")
     parser.add_argument("--targets", type=Path, help="JSON file listing target paths.")
     parser.add_argument("--count", type=int, default=100, help="Number of AI payloads to request.")
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="CSV output path.")
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="JSON Lines output path.")
     parser.add_argument(
         "--refresh-payloads",
         action="store_true",
@@ -46,46 +54,64 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_scan(session: base.LabSession, target_urls: list[str], payloads: list[str]) -> list[ReflectionFinding]:
-    findings: list[ReflectionFinding] = []
+def _attack_vectors() -> list[tuple[str, str]]:
+    """Every (name, kind) vector to test in isolation, one per request."""
+    return [(name, "param") for name in INJECTABLE_PARAMS] + [(name, "header") for name in INJECTABLE_HEADERS]
+
+
+def _probe(session: base.LabSession, url: str, vector_name: str, vector_kind: str, payload: str) -> tuple[str, str]:
+    """Send one isolated GET+POST probe and return the worst-case (label, body)."""
+    attack_params = dict(FORM_TRIGGERS)
+    attack_headers: dict[str, str] = {}
+    if vector_kind == "param":
+        attack_params[vector_name] = payload
+    else:
+        attack_headers[vector_name] = base.safe_header_value(payload)
+
+    res_get = session.get(url, params=attack_params, headers=attack_headers)
+    res_post = session.post(url, data=attack_params, headers=attack_headers)
+
+    label_get = xss_rules.classify_reflection(payload, res_get.text)
+    label_post = xss_rules.classify_reflection(payload, res_post.text)
+    return xss_rules.most_severe((label_get, res_get.text), (label_post, res_post.text))
+
+
+def run_scan(session: base.LabSession, target_urls: list[str], payloads: list[str]) -> list[Finding]:
+    findings: list[Finding] = []
     skipped = 0
+    vectors = _attack_vectors()
+    tests_per_url = len(payloads) * len(vectors)
 
     for url_idx, url in enumerate(target_urls, 1):
-        print(f"\n[{url_idx}/{len(target_urls)}] 타겟 스캔 중: {url}")
+        print(f"\n[{url_idx}/{len(target_urls)}] 타겟 스캔 중: {url} (테스트 {tests_per_url}건)")
+        test_no = 0
 
-        for i, payload in enumerate(payloads, 1):
-            # [범용 인젝션] GET, POST, Stored 등에 자주 쓰이는 파라미터 이름을 모두 포함
-            attack_params = {name: payload for name in INJECTABLE_PARAMS}
-            attack_params.update({"action": "add", "form": "submit"})
-            # [헤더 인젝션] User-Agent, Referer, Custom Header 취약점을 노리기 위한 헤더 조작
-            # 헤더는 latin-1만 허용되므로, 한글/이모지 등 AI 페이로드는 안전하게 인코딩
-            header_value = base.safe_header_value(payload)
-            attack_headers = {name: header_value for name in INJECTABLE_HEADERS}
+        for payload in payloads:
+            for vector_name, vector_kind in vectors:
+                test_no += 1
 
-            try:
-                res_get = session.get(url, params=attack_params, headers=attack_headers)
-                res_post = session.post(url, data=attack_params, headers=attack_headers)
-            except (requests.RequestException, UnicodeError):
-                skipped += 1
-                continue
+                try:
+                    rule_label, response_body = _probe(session, url, vector_name, vector_kind, payload)
+                except (requests.RequestException, UnicodeError):
+                    skipped += 1
+                    continue
 
-            reflected_in_get = payload in res_get.text
-            is_reflected = reflected_in_get or payload in res_post.text
-            snippet = (res_get.text if reflected_in_get else res_post.text)[:200]
+                if rule_label != xss_rules.NOT_REFLECTED:
+                    print(f"   ㄴ [{vector_name}] {rule_label} (페이로드: {payload[:20]}...)")
+                elif test_no % 50 == 0:
+                    print(f"   ㄴ [Test {test_no}/{tests_per_url}] 진행 중...")
 
-            # 터미널 출력은 너무 길어지지 않게 10번 단위 또는 반사 발생 시에만 출력
-            if i % 10 == 0 or is_reflected:
-                status = "Yes" if is_reflected else "No (Filtered)"
-                print(f"   ㄴ [Test {i}/{len(payloads)}] 반사 여부: {status} (페이로드: {payload[:20]}...)")
-
-            findings.append(
-                ReflectionFinding(
-                    target_url=url,
-                    payload=payload,
-                    is_reflected=is_reflected,
-                    response_snippet=snippet,
+                findings.append(
+                    Finding(
+                        finding_id=str(uuid.uuid4()),
+                        vuln_type=VULN_TYPE,
+                        url=url,
+                        parameter=vector_name,
+                        payload=payload,
+                        rule_label=rule_label,
+                        response_body=response_body,
+                    )
                 )
-            )
 
     if skipped:
         print(f"\n[Info] 요청 실패(타임아웃 등)로 스킵된 테스트: {skipped}건")
@@ -121,11 +147,15 @@ def main() -> None:
         force_refresh=args.refresh_payloads,
     )
 
-    print(f"\n[2단계] 다중 URL 공격 스캔 시작... (타겟: {len(config.target_urls)}개, 페이로드: {len(payloads)}개)")
+    vector_count = len(_attack_vectors())
+    print(
+        f"\n[2단계] 파라미터별 개별 공격 스캔 시작... "
+        f"(타겟: {len(config.target_urls)}개, 페이로드: {len(payloads)}개, 공격 벡터: {vector_count}개)"
+    )
     findings = run_scan(session, list(config.target_urls), payloads)
 
-    base.write_csv(args.output, [f.to_row() for f in findings], ReflectionFinding.fieldnames())
-    print(f"\n[Info] CSV 저장 완료: '{args.output}'")
+    base.write_jsonl(args.output, [f.to_dict() for f in findings])
+    print(f"\n[Info] JSON Lines 저장 완료: '{args.output}' ({len(findings)}건)")
 
 
 if __name__ == "__main__":
