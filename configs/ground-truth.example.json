@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "assessment_set_id": "sqli-burp-v1",
+  "target_set_id": "local-lab-v1",
+  "assessor_tool": "Burp Suite",
+  "created_at": "2026-08-27T10:00:00+09:00",
+  "cases": [
+    {
+      "case_id": "sqli-search-a",
+      "vuln_type": "SQLI",
+      "label": "VULNERABLE",
+      "evidence_summary": "참·거짓 조건에 따라 응답 결과가 반복적으로 달라졌습니다.",
+      "assessed_at": "2026-08-27T09:55:00+09:00"
+    },
+    {
+      "case_id": "sqli-search-b",
+      "vuln_type": "SQLI",
+      "label": "SAFE",
+      "evidence_summary": "공격값과 정상값 사이에 유의미한 응답 차이가 없었습니다.",
+      "assessed_at": "2026-08-27T09:56:00+09:00"
+    },
+    {
+      "case_id": "sqli-search-c",
+      "vuln_type": "SQLI",
+      "label": "SAFE",
+      "evidence_summary": "수동 재현에서 SQL 구문 개입이 확인되지 않았습니다.",
+      "assessed_at": "2026-08-27T09:57:00+09:00"
+    },
+    {
+      "case_id": "sqli-search-d",
+      "vuln_type": "SQLI",
+      "label": "VULNERABLE",
+      "evidence_summary": "Burp Suite 재현 요청에서 MySQL 오류가 반복적으로 노출되었습니다.",
+      "assessed_at": "2026-08-27T09:58:00+09:00"
+    }
+  ]
+}
