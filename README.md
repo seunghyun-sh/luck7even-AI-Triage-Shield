@@ -29,6 +29,8 @@ XSS와 SQL Injection 진단 결과를 수집하고, 규칙 기반 1차 판정과
 ├── lab_app/               # 이 브랜치의 자리표시자 스켈레톤(health 체크만 있음, 아래 참고)
 ├── scanners/              # XSS·SQLi 스캐너와 공통 로직
 │   ├── base.py            # 공용 HTTP 헬퍼(같은 호스트로만 리다이렉트 추적 등)
+│   ├── xss_payloads.py    # AI 페이로드 생성(payload_profile 단위)
+│   ├── payload_cache.py   # payload_profile별 페이로드 캐시 파일 입출력
 │   ├── xss_rules.py       # 반사 여부 내부 판정 로직
 │   ├── xss_report.py      # 내부 판정 -> Contract B(raw findings) 조립 + sidecar 저장
 │   └── pipeline/          # main.py가 실제로 호출하는 계약 준수 스캐너
@@ -116,12 +118,20 @@ python -m scanners.pipeline.xss \
   --target-set-id novastream-2
 ```
 
+주요 옵션:
+
+- `--count`: 캐시가 없을 때 AI에게 요청할 페이로드 개수 (기본 100)
+- `--refresh-payloads`: 캐시를 무시하고 AI 페이로드를 새로 생성
+- `--timeout`: 요청 하나당 타임아웃(초, 기본 5)
+
+**AI 페이로드 생성과 캐싱**: 매니페스트의 각 케이스는 `payload_profile`(예: `"xss-v1"`)을 갖고 있습니다. `scan()`은 실행할 때마다 페이로드를 새로 만들지 않고, `data/raw/payload_profiles/<payload_profile>.json`(Git 제외)에 저장된 캐시가 있으면 그대로 재사용합니다. 캐시가 없을 때만 OpenAI를 호출해 100개 안팎의 페이로드(실제 공격 + 오탐 유도용 무해한 텍스트를 절반씩 섞음, `scanners/xss_payloads.py`)를 생성하고 캐시에 저장합니다. **같은 `payload_profile`을 쓰는 두 실습 환경(Lumi Market, NovaStream)은 이 캐시를 공유**하므로, 한 번 생성되면 둘 다 같은 페이로드 집합을 재사용하고 AI를 중복 호출하지 않습니다. `.env`에 `OPENAI_API_KEY`가 없거나 호출이 실패하면 작은 고정 페이로드 몇 개로 대체하되, 그 결과는 캐시에 저장하지 않아 다음 실행에서 다시 AI 호출을 시도합니다.
+
 **실행 계약에 명시되지 않아 실용적으로 채운 부분** (통합 담당과 추후 확인 필요):
 
 - `base_url`: 계약의 target manifest에는 최상위에 `base_url`이 있지만, `scan()` 함수 시그니처 자체에는 전달 방법이 없어 키워드 인자로 받습니다.
 - `TargetCase.verification_mode`(`"reflected"`/`"stored"`)와 `verify_path`: Stored XSS의 2단계 검증(주입 후 별도 조회) 여부와, 작성 페이지와 확인 페이지가 다를 때(NovaStream처럼) 어디를 조회할지를 정하는 값인데, Contract A의 정식 필드에는 이를 표현할 곳이 없어 매니페스트 JSON에 추가 필드로 넣었습니다. 작성·확인 페이지가 같으면 `verify_path`는 생략합니다.
 - `auth_profile`/`requires_pre_auth=true` 케이스의 인증 흐름은 아직 설계하지 않았습니다. 지금까지 확인된 케이스는 모두 인증이 필요 없어 문제가 안 되지만, 해당 케이스를 만나면 `NotImplementedError`를 던지도록 명시적으로 막아뒀습니다.
-- `payload_profile`(AI가 안정적인 `payload_case_id`를 부여해 생성하는 방식)은 아직 합의되지 않아 이번 구현에서 완전히 배제했습니다. 대신 고정된 소규모 페이로드 목록을 기본값으로 사용합니다.
+- **스캐너의 OpenAI 호출**: 실행 계약(11.5)은 "스캐너가 OpenAI API를 호출하지 않는다"고 명시하지만, 위 페이로드 생성 때문에 이 스캐너는 실행 경로 안에서 OpenAI를 호출합니다. 결과 판정용 2차 AI 호출과는 성격이 다르다고 보고 일단 이대로 두었으나, 정식 `payload_profile` 파이프라인이 합의되면 재검토가 필요합니다.
 
 #### 결과 파일 형식 (Contract B: raw findings)
 

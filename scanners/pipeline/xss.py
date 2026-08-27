@@ -37,10 +37,14 @@ A(target manifest) 입력과 Contract B(raw findings) 출력을 계약대로 맞
   확인된 XSS 케이스는 모두 인증이 필요 없어서(`requires_pre_auth: false`) 당장은
   문제가 안 되지만, pre-auth 케이스가 추가되면 다시 논의해야 한다
   (`_run_one`에서 이 경우 NotImplementedError를 던지도록 명시적으로 막아둠).
-- `payload_profile`: AI가 안정적인 `payload_case_id`를 붙여 생성하는 방식은
-  아직 합의되지 않아 이번 구현에서는 완전히 배제했다. 대신 고정된 소규모
-  페이로드 목록(DEFAULT_PAYLOADS)을 기본값으로 쓰고, 필요하면 `scan()`
-  호출자가 다른 목록을 넘길 수 있게만 해뒀다.
+- `payload_profile`: 각 타겟에 적힌 `payload_profile` 이름(예: `"xss-v1"`)마다
+  `scanners/xss_payloads.get_payloads()`를 호출해 (payload_case_id, payload)
+  목록을 얻는다. 캐시(`data/raw/payload_profiles/<profile>.json`)가 있으면
+  재사용하고, 없을 때만 AI(OpenAI)를 호출해 새로 생성한 뒤 캐시에 저장한다.
+  같은 payload_profile을 여러 실습 환경(Lumi Market, NovaStream)이 함께 쓰면
+  캐시도 함께 재사용되어 AI를 중복 호출하지 않는다. 이 모듈이 스캐너 실행
+  경로 안에서 OpenAI를 호출한다는 점은 실행 계약(11.5)과 긴장 관계가 있다 --
+  자세한 내용은 scanners/xss_payloads.py 모듈 docstring 참고.
 """
 
 from __future__ import annotations
@@ -55,15 +59,17 @@ from urllib.parse import urljoin
 import requests
 
 from analysis.models import RawFinding, ScanRequest, TargetCase
-from scanners import base, xss_report, xss_rules
+from scanners import base, xss_payloads, xss_report, xss_rules
 
 ProgressCallback = Callable[[int, int], None]
 
 DEFAULT_TIMEOUT = 5.0
 
-# payload_profile 연동이 정해지기 전까지 쓰는 임시 고정 목록.
-# (payload_case_id, payload) 쌍. AI 관련 사항은 이번 구현에서 의도적으로 배제했다.
-DEFAULT_PAYLOADS: list[tuple[str, str]] = [
+# 테스트/수동 실행 시 AI 호출 없이 빠르게 확인하고 싶을 때 scan(payloads=...)에
+# 직접 넘길 수 있는 소규모 고정 목록. 기본 동작(payloads=None)에서는 쓰이지
+# 않고, 대신 각 타겟의 payload_profile을 통해 xss_payloads.get_payloads()가
+# 페이로드를 채운다.
+SAMPLE_PAYLOADS: list[tuple[str, str]] = [
     ("script-basic", "<script>alert(1)</script>"),
     ("img-onerror", "<img src=x onerror=alert(1)>"),
     ("plain-text", "그냥 평범한 후기 텍스트입니다"),
@@ -181,6 +187,31 @@ def _scan_one(
     return xss_report.make_finding(case_id, finding_id, scan)
 
 
+def _resolve_payloads_by_profile(
+    targets: list[TargetCase],
+    payloads: list[tuple[str, str]] | None,
+    payload_count: int,
+    refresh_payloads: bool,
+) -> dict[str, list[tuple[str, str]]]:
+    """타겟들이 쓰는 payload_profile마다 페이로드 목록을 한 번씩만 준비한다.
+
+    `payloads`를 명시적으로 넘기면(테스트/수동 실행) 모든 타겟에 그대로
+    적용하고 AI는 전혀 호출하지 않는다. 넘기지 않으면 각 타겟의
+    `payload_profile`로 xss_payloads.get_payloads()를 호출한다 -- 같은
+    profile을 여러 타겟(또는 여러 실습 환경)이 공유하면 한 번만 조회/생성한다.
+    """
+    if payloads is not None:
+        return {target.payload_profile: payloads for target in targets}
+
+    resolved: dict[str, list[tuple[str, str]]] = {}
+    for target in targets:
+        if target.payload_profile not in resolved:
+            resolved[target.payload_profile] = xss_payloads.get_payloads(
+                target.payload_profile, count=payload_count, force_refresh=refresh_payloads
+            )
+    return resolved
+
+
 def scan(
     targets: list[TargetCase],
     scan_run_id: str,
@@ -188,6 +219,8 @@ def scan(
     *,
     base_url: str,
     payloads: list[tuple[str, str]] | None = None,
+    payload_count: int = xss_payloads.DEFAULT_COUNT,
+    refresh_payloads: bool = False,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> list[RawFinding]:
     """모든 (타겟 x 페이로드) 조합을 실행하고 RawFinding 목록을 메모리로 반환한다.
@@ -195,10 +228,13 @@ def scan(
     이 함수는 findings.json을 게시하지 않는다(계약 12.1: main.py가 XSS·SQLi
     결과를 하나의 envelope로 합쳐서 게시함). 다만 응답 본문 sidecar HTML은
     이 함수가 직접 저장한다(계약 11.4는 이걸 스캐너의 책임으로 명시함).
+
+    `payloads`를 지정하지 않으면(기본값) 각 타겟의 payload_profile로 AI
+    페이로드 캐시를 조회/생성한다(캐시가 없을 때만 실제로 AI를 호출함).
     """
-    payloads = payloads if payloads is not None else DEFAULT_PAYLOADS
+    payloads_by_profile = _resolve_payloads_by_profile(targets, payloads, payload_count, refresh_payloads)
     run_dir = Path("data/raw") / scan_run_id
-    total = len(targets) * len(payloads)
+    total = sum(len(payloads_by_profile[target.payload_profile]) for target in targets)
     completed = 0
 
     findings: list[RawFinding] = []
@@ -206,7 +242,7 @@ def scan(
     counter = itertools.count(1)
 
     for target in targets:
-        for payload_case_id, payload in payloads:
+        for payload_case_id, payload in payloads_by_profile[target.payload_profile]:
             finding_id = xss_report.make_finding_id(next(counter))
             finding = _scan_one(session, base_url, target, payload_case_id, payload, finding_id, run_dir, timeout)
             findings.append(finding)
@@ -228,7 +264,11 @@ def _local_scan_run_id() -> str:
 def _main() -> None:
     import argparse
 
+    from dotenv import load_dotenv
+
     from analysis.models import RunEnvelope
+
+    load_dotenv()  # OPENAI_API_KEY 등을 .env에서 읽어온다(xss_payloads가 사용).
 
     parser = argparse.ArgumentParser(description="실습 환경 XSS 계약 스캐너 로컬 실행")
     parser.add_argument(
@@ -240,6 +280,10 @@ def _main() -> None:
     parser.add_argument("--base-url", required=True, help="예: http://127.0.0.1:5001 (배포 후에는 실제 서버 주소)")
     parser.add_argument("--target-set-id", required=True, help="예: lumi-market-1, novastream-2")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
+    parser.add_argument(
+        "--count", type=int, default=xss_payloads.DEFAULT_COUNT, help="캐시가 없을 때 AI에게 요청할 페이로드 개수 (기본 100)"
+    )
+    parser.add_argument("--refresh-payloads", action="store_true", help="캐시를 무시하고 AI 페이로드를 새로 생성")
     args = parser.parse_args()
 
     scan_run_id = _local_scan_run_id()
@@ -249,7 +293,15 @@ def _main() -> None:
         print(f"[진행] {completed}/{total}")
 
     started_at = xss_report.now_iso()
-    findings = scan(targets, scan_run_id, on_progress, base_url=args.base_url, timeout=args.timeout)
+    findings = scan(
+        targets,
+        scan_run_id,
+        on_progress,
+        base_url=args.base_url,
+        timeout=args.timeout,
+        payload_count=args.count,
+        refresh_payloads=args.refresh_payloads,
+    )
 
     envelope = RunEnvelope(
         scan_run_id=scan_run_id,
