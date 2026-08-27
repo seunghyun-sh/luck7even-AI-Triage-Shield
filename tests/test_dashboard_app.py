@@ -1,16 +1,47 @@
 """Streamlit dashboard integration smoke test."""
 
 import json
+import shutil
+from datetime import timedelta
 from pathlib import Path
 
 import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from dashboard.app import _report_frame
+from orchestration.models import ExecutionStage, ExecutionStatus, RunRequest
+from orchestration.run_store import RunStore
 
 APP_PATH = Path(__file__).resolve().parents[1] / "dashboard" / "app.py"
 SAMPLE_PATH = Path(__file__).resolve().parents[1] / "configs" / "triaged-results.example.json"
 PROCESSED_PATH = Path(__file__).resolve().parents[1] / "data" / "processed"
+
+
+def _complete_run(store: RunStore, initial) -> None:
+    running_time = initial.updated_at + timedelta(microseconds=1)
+    running = initial.model_copy(
+        update={
+            "status": ExecutionStatus.RUNNING,
+            "stage": ExecutionStage.VALIDATING_TARGET,
+            "updated_at": running_time,
+        }
+    )
+    store.save_status(running)
+    terminal_time = running_time + timedelta(microseconds=1)
+    store.save_status(
+        running.model_copy(
+            update={
+                "status": ExecutionStatus.COMPLETED,
+                "stage": None,
+                "updated_at": terminal_time,
+                "completed_at": terminal_time,
+                "raw_result_path": f"raw/{initial.scan_run_id}/findings.json",
+                "processed_result_path": (
+                    f"processed/{initial.scan_run_id}/results.json"
+                ),
+            }
+        )
+    )
 
 
 def test_dashboard_renders_contract_sample() -> None:
@@ -28,6 +59,40 @@ def test_dashboard_renders_contract_sample() -> None:
     ]
     assert len(app.dataframe) == 1
     assert len(app.get("download_button")) == 1
+
+
+def test_execution_tab_lists_only_contract_manifest_and_disables_default_launch() -> None:
+    app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+    assert not app.exception
+    manifest_selector = next(
+        selectbox
+        for selectbox in app.selectbox
+        if selectbox.label == "허가된 대상 manifest"
+    )
+    assert manifest_selector.value == (
+        Path(__file__).resolve().parents[1] / "configs" / "targets.example.json"
+    )
+    launch_button = next(
+        button for button in app.button if button.label == "진단 실행 시작"
+    )
+    assert launch_button.disabled
+
+
+def test_execution_tab_displays_authoritative_run_status() -> None:
+    store = RunStore(PROCESSED_PATH.parent)
+    status = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
+    try:
+        app = AppTest.from_file(str(APP_PATH))
+        app.session_state["scan_run_id"] = status.scan_run_id
+        app.run(timeout=30)
+
+        assert not app.exception
+        assert any(
+            "상태: **QUEUED**" in markdown.value for markdown in app.markdown
+        )
+    finally:
+        shutil.rmtree(PROCESSED_PATH.parent / "runs" / status.scan_run_id)
 
 
 def test_dashboard_renders_conditional_sqli_evaluation() -> None:
@@ -54,10 +119,13 @@ def test_dashboard_renders_conditional_sqli_evaluation() -> None:
 
 
 def test_dashboard_uses_discovered_actual_results_by_default() -> None:
-    results_path = PROCESSED_PATH / "app-test-actual" / "results.json"
+    store = RunStore(PROCESSED_PATH.parent)
+    initial = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
+    results_path = PROCESSED_PATH / initial.scan_run_id / "results.json"
     results_path.parent.mkdir()
     results_path.write_text(SAMPLE_PATH.read_text())
     try:
+        _complete_run(store, initial)
         app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
 
         assert not app.exception
@@ -66,6 +134,7 @@ def test_dashboard_uses_discovered_actual_results_by_default() -> None:
     finally:
         results_path.unlink()
         results_path.parent.rmdir()
+        shutil.rmtree(PROCESSED_PATH.parent / "runs" / initial.scan_run_id)
 
 
 def test_report_frame_adds_ground_truth_annotations_and_unlabeled_exclusion() -> None:
@@ -105,12 +174,15 @@ def test_report_frame_adds_ground_truth_annotations_and_unlabeled_exclusion() ->
 
 
 def test_dashboard_distinguishes_zero_run_from_filter_reset() -> None:
-    results_path = PROCESSED_PATH / "app-test-zero" / "results.json"
+    store = RunStore(PROCESSED_PATH.parent)
+    initial = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
+    results_path = PROCESSED_PATH / initial.scan_run_id / "results.json"
     zero_run = json.loads(SAMPLE_PATH.read_text())
     zero_run.update({"status": "COMPLETED", "findings": []})
     results_path.parent.mkdir()
     results_path.write_text(json.dumps(zero_run))
     try:
+        _complete_run(store, initial)
         app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
 
         assert not app.exception
@@ -126,3 +198,4 @@ def test_dashboard_distinguishes_zero_run_from_filter_reset() -> None:
     finally:
         results_path.unlink()
         results_path.parent.rmdir()
+        shutil.rmtree(PROCESSED_PATH.parent / "runs" / initial.scan_run_id)

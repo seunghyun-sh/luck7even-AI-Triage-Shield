@@ -1,5 +1,6 @@
 """Shared execution-state primitives for the diagnostic pipeline."""
 
+from .launcher import RunLaunchError, start_run
 from .models import (
     ExecutionStage,
     ExecutionStatus,
@@ -17,8 +18,10 @@ __all__ = [
     "PipelineOrchestrator",
     "Progress",
     "RunAlreadyActiveError",
+    "RunLaunchError",
     "RunRequest",
     "RunStatusDocument",
     "RunStore",
     "TargetValidationError",
+    "start_run",
 ]

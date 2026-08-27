@@ -1,4 +1,4 @@
-"""Review-only Streamlit dashboard for validated triage results."""
+"""Streamlit dashboard for authorized diagnostics and triage review."""
 
 from __future__ import annotations
 
@@ -28,9 +28,16 @@ from dashboard.metrics import (
     build_type_counts,
 )
 from dashboard.report_builder import build_excel_report
+from orchestration.data_loader import ContractLoadError, load_target_manifest
+from orchestration.launcher import RunLaunchError, start_run
+from orchestration.run_store import RunStore
 
 SAMPLE_PROCESSED = PROJECT_ROOT / "configs" / "triaged-results.example.json"
 SAMPLE_GROUND_TRUTH = PROJECT_ROOT / "configs" / "ground-truth.example.json"
+DATA_ROOT = PROJECT_ROOT / "data"
+RUN_STORE = RunStore(DATA_ROOT)
+ACTIVE_STATUSES = {"QUEUED", "RUNNING"}
+TERMINAL_STATUSES = {"COMPLETED", "PARTIAL", "FAILED"}
 
 TRUSTED_CSS = """
 <style>
@@ -140,11 +147,24 @@ def _apply_filters(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _available_processed_results() -> list[Path]:
-    """Return project-local processed artifacts without exposing absolute paths."""
+    """Return only contract-published terminal results."""
 
+    if not RUN_STORE.runs_dir.is_dir():
+        return []
+    results: list[Path] = []
+    for run_dir in RUN_STORE.runs_dir.iterdir():
+        if not run_dir.is_dir():
+            continue
+        try:
+            result = _safe_processed_path(RUN_STORE.load_status(run_dir.name))
+        except (FileNotFoundError, ValueError):
+            continue
+        if result is not None:
+            results.append(result)
     return sorted(
-        (PROJECT_ROOT / "data" / "processed").glob("*/results.json"),
+        results,
         key=lambda path: (path.parent.name, path.name),
+        reverse=True,
     )
 
 
@@ -423,12 +443,27 @@ def _load_inputs() -> tuple[Any | None, Any | None]:
         if available_results
         else ("샘플 사용", "JSON 업로드")
     )
-    processed_mode = st.sidebar.radio("Processed 결과", source_modes)
+    default_mode = (
+        "발견된 결과 사용"
+        if st.session_state.pop("review_prefer_discovered_result", False)
+        and available_results
+        else source_modes[0]
+    )
+    processed_mode = st.sidebar.radio(
+        "Processed 결과", source_modes, index=source_modes.index(default_mode)
+    )
     source: Any | None
     if processed_mode == "발견된 결과 사용":
+        preferred_path = st.session_state.pop("review_preferred_result_path", None)
+        index = (
+            available_results.index(preferred_path)
+            if preferred_path in available_results
+            else 0
+        )
         source = st.sidebar.selectbox(
             "발견된 결과 파일",
             available_results,
+            index=index,
             format_func=_processed_display_name,
         )
     elif processed_mode == "샘플 사용":
@@ -467,12 +502,137 @@ def _load_inputs() -> tuple[Any | None, Any | None]:
     return run, ground_truth
 
 
-def main() -> None:
-    st.set_page_config(page_title="Triage Shield | 검토 대시보드", layout="wide")
-    st.markdown(TRUSTED_CSS, unsafe_allow_html=True)
+def _available_target_manifests() -> list[tuple[Path, Any]]:
+    manifests: list[tuple[Path, Any]] = []
+    for path in sorted((PROJECT_ROOT / "configs").glob("targets*.json")):
+        try:
+            manifests.append((path, load_target_manifest(path)))
+        except (ContractLoadError, OSError, TypeError, ValueError):
+            continue
+    return manifests
+
+
+def _safe_processed_path(status: Any) -> Path | None:
+    path = status.processed_result_path
+    if status.status.value not in {"COMPLETED", "PARTIAL"} or not path:
+        return None
+    if path != f"processed/{status.scan_run_id}/results.json":
+        return None
+    candidate = (DATA_ROOT / path).resolve()
+    try:
+        candidate.relative_to(DATA_ROOT.resolve())
+    except ValueError:
+        return None
+    return candidate if candidate.is_file() else None
+
+
+def _active_run_id() -> str | None:
+    """Find an active contract run from RunStore statuses, not session state."""
+
+    if not RUN_STORE.runs_dir.is_dir():
+        return None
+    for run_dir in sorted(RUN_STORE.runs_dir.iterdir()):
+        if not run_dir.is_dir():
+            continue
+        try:
+            status = RUN_STORE.load_status(run_dir.name)
+        except (FileNotFoundError, ValueError):
+            continue
+        if status.status.value in ACTIVE_STATUSES:
+            return status.scan_run_id
+    return None
+
+
+def _render_run_status(scan_run_id: str, *, polling: bool) -> None:
+    try:
+        status = RUN_STORE.load_status(scan_run_id)
+    except (FileNotFoundError, ValueError):
+        st.warning("실행 상태를 읽을 수 없습니다.")
+        return
+
+    st.write(f"상태: **{status.status.value}**")
+    st.write(f"단계: **{status.stage.value if status.stage else '대기 중'}**")
+    st.progress(
+        status.progress.completed / status.progress.total
+        if status.progress.total
+        else 0,
+        text=f"진행률: {status.progress.completed}/{status.progress.total}",
+    )
+    if status.status.value in {"COMPLETED", "PARTIAL"}:
+        processed_path = _safe_processed_path(status)
+        if processed_path is not None:
+            st.session_state["review_prefer_discovered_result"] = True
+            st.session_state["review_preferred_result_path"] = processed_path
+            st.success("처리 결과를 결과 검토 탭에서 선택했습니다.")
+        else:
+            st.warning("검토에 사용할 안전한 처리 결과를 찾을 수 없습니다.")
+    elif status.status.value == "FAILED":
+        if status.error is not None:
+            st.error(f"{status.error.code}: {status.error.message}")
+        else:
+            st.error("실행이 실패했습니다.")
+    if polling and status.status.value in TERMINAL_STATUSES:
+        st.rerun()
+
+
+def _render_execution_tab() -> None:
+    st.subheader("진단 실행")
+    manifests = _available_target_manifests()
+    if not manifests:
+        st.error("검증된 대상 manifest가 없습니다.")
+        return
+
+    paths = [path for path, _ in manifests]
+    manifest_names = {path: manifest.target_set_id for path, manifest in manifests}
+    selected_path = st.selectbox(
+        "허가된 대상 manifest",
+        paths,
+        format_func=lambda path: f"{path.name} · {manifest_names[path]}",
+    )
+    selected_types = st.multiselect("진단 유형", ("XSS", "SQLI"))
+    acknowledged = st.checkbox("격리되고 허가된 진단 환경임을 확인했습니다.")
+
+    scan_run_id = st.session_state.get("scan_run_id")
+    active_run_id = _active_run_id()
+    active = active_run_id is not None
+    if active_run_id is not None:
+        scan_run_id = active_run_id
+        st.session_state["scan_run_id"] = active_run_id
+    elif scan_run_id:
+        try:
+            RUN_STORE.load_status(scan_run_id)
+        except (FileNotFoundError, ValueError):
+            st.session_state.pop("scan_run_id", None)
+            scan_run_id = None
+    if st.button(
+        "진단 실행 시작",
+        disabled=not (selected_types and acknowledged) or active,
+    ):
+        try:
+            st.session_state["scan_run_id"] = start_run(
+                selected_path.relative_to(PROJECT_ROOT), selected_types
+            )
+        except RunLaunchError as error:
+            st.error(str(error))
+        else:
+            st.rerun()
+
+    scan_run_id = st.session_state.get("scan_run_id") or active_run_id
+    if not scan_run_id:
+        return
+    polling = scan_run_id == active_run_id
+
+    @st.fragment(run_every=2 if polling else None)
+    def status_fragment() -> None:
+        _render_run_status(scan_run_id, polling=polling)
+
+    status_fragment()
+
+
+def _render_review_tab() -> None:
     run, ground_truth = _load_inputs()
     if run is None:
-        st.stop()
+        return
 
     metadata = _run_metadata(run)
     st.title("Triage Shield · 취약점 검토 관제")
@@ -557,6 +717,16 @@ def main() -> None:
             file_name=f"vulnerability_review_{run.scan_run_id}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+
+
+def main() -> None:
+    st.set_page_config(page_title="Triage Shield | 검토 대시보드", layout="wide")
+    st.markdown(TRUSTED_CSS, unsafe_allow_html=True)
+    execution_tab, review_tab = st.tabs(["진단 실행", "결과 검토"])
+    with execution_tab:
+        _render_execution_tab()
+    with review_tab:
+        _render_review_tab()
 
 
 if __name__ == "__main__":
