@@ -164,12 +164,43 @@ def main():
 
     processed_findings = []
     
-    for finding in envelope.get("findings", []):
+    findings_list = envelope.get("findings", [])
+    total_count = len(findings_list)
+    print(f"총 {total_count}개의 데이터를 처리합니다... (터미널 랙 방지를 위해 1,000개 단위로 진행상황 출력)")
+
+    processed_findings = []
+    
+    for idx, finding in enumerate(findings_list, start=1):
         finding_id = finding.get('finding_id', 'Unknown')
-        print(f"\n분석 중: {finding_id}...")
         
-        if finding.get("scan", {}).get("status") == "COMPLETED":
-            updated_finding = analyze_finding(finding, base_dir, cache_dict)
+        # 1,000개마다 한 번씩만 출력
+        if idx % 1000 == 0:
+            print(f"진행 상황: {idx} / {total_count} 처리 완료...")
+            
+        scan_status = finding.get("scan", {}).get("status")
+        rule_label = finding.get("scan", {}).get("rule", {}).get("label")
+        
+        if scan_status == "COMPLETED":
+            # 스캐너가 SAFE 판정 시 AI 스킵 (출력 제거)
+            if rule_label == "SAFE":
+                finding["ai"] = {
+                    "status": "NOT_REQUESTED",
+                    "status_reason": "RULE_NOT_SUSPECTED",
+                    "label": None,
+                    "confidence": None,
+                    "needs_human_review": False,
+                    "assessment_summary": None,
+                    "source_evidence": None,
+                    "impact": None,
+                    "recommendation": None,
+                    "manual_check": None,
+                    "report_paragraph": None,
+                    "error": None
+                }
+                processed_findings.append(finding)
+            else:
+                updated_finding = analyze_finding(finding, base_dir, cache_dict)
+                processed_findings.append(updated_finding)
         else:
             updated_finding = finding
             updated_finding["ai"] = {
@@ -186,7 +217,12 @@ def main():
                 "report_paragraph": None,
                 "error": None
             }
-        processed_findings.append(updated_finding)
+            processed_findings.append(updated_finding)
+            
+    # AI 처리에 하나라도 FAILED가 있으면 봉투 상태를 PARTIAL로 하향 조정
+    has_failed = any(f.get("ai", {}).get("status") == "FAILED" for f in processed_findings)
+    if has_failed and envelope.get("status") == "COMPLETED":
+        envelope["status"] = "PARTIAL"
         
     envelope["findings"] = processed_findings
     
@@ -200,6 +236,5 @@ def main():
         json.dump(envelope, f, ensure_ascii=False, indent=2)
         
     print(f"\n분석 및 캐시 저장 완료! '{output_file}'")
-
 if __name__ == "__main__":
     main()
