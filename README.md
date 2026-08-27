@@ -34,7 +34,9 @@ XSS와 SQL Injection 진단 결과를 수집하고, 규칙 기반 1차 판정과
 │   ├── payload_cache.py   # 범용 페이로드 캐시 파일 입출력
 │   ├── xss_rules.py       # 반사 여부 내부 판정 로직
 │   ├── xss_report.py      # 내부 판정 -> Contract B(raw findings) 조립 + sidecar 저장
-│   └── xss.py             # XSS 스캔 오케스트레이션(로그인 → 스캔 → findings.json)
+│   ├── xss.py             # bWAPP 대상 탐색용 샷건 스캐너 (계약 준수 대상 아님, 임시 검증용)
+│   └── pipeline/          # main.py가 실제로 호출하는 계약 준수 스캐너
+│       └── xss.py         # scan(targets, scan_run_id, on_progress) -- lab_app(Lumi Market) 대상
 ├── tests/                 # 자동화 테스트
 ├── main.py                # 로컬 통합 실행 진입점
 └── requirements.txt
@@ -149,6 +151,32 @@ RawFinding 1건 = 요청 1번:
 - 요청 자체가 실패하면(타임아웃 등) `scan.status="FAILED"`이고 `response`/`rule`은 모두 `null`, `error`에 `{code, message, retryable}`이 채워집니다. 실패한 시도도 삭제하지 않고 그대로 기록합니다.
 
 **계약과의 알려진 차이점**: 계약의 `input_location`은 `query`/`form`/`json`만 정의하지만, 이 스캐너는 bWAPP의 User-Agent/Referer/커스텀 헤더 기반 반사도 탐지하므로 편의상 `"header"` 값을 추가로 씁니다. 아직 팀 합의를 거치지 않은 확장이니, 이 값을 소비하는 다음 단계(OpenAI·데이터 처리 담당)가 생기면 계약 문서 갱신과 버전업 절차(계약 8장)를 거쳐야 합니다.
+
+> **주의**: 위 `scanners/xss.py`(bWAPP 대상)는 공식 실습 환경이 없던 시기에 팀이 임시로 검증용으로 쓰던 서버를 대상으로 하며, 아래 실행 계약을 지킬 의무가 없는 별도 도구입니다. 실제 파이프라인이 호출하는 스캐너는 아래 `scanners/pipeline/xss.py`입니다.
+
+### 4-2. 파이프라인용 XSS 스캐너 (`scanners/pipeline/xss.py`, lab_app 대상)
+
+`main.py`(통합 담당)가 실제로 호출할 것을 전제로, 실행 계약이 정의한 `scan(targets, scan_run_id, on_progress) -> list[RawFinding]` 인터페이스를 구현합니다. 대상은 `feature/vulnerable-lab` 브랜치의 `lab_app/`(Lumi Market, 1번 실습 환경, `docs/vulnerable-lab-1.md`)이며, 현재 아래 두 케이스를 다룹니다.
+
+- **XSS-01 (Reflected)**: `GET /search`, query 파라미터 `q`
+- **XSS-02 (Stored)**: `POST` 후 `GET /reviews`, form 파라미터 `content`
+
+타겟 매니페스트 예시: `configs/lumi_market_1_xss_targets.example.json` (Contract A 형식).
+
+로컬에서 직접 확인해보려면(main.py 통합 전 임시 실행 경로, 실제 파이프라인은 이 CLI가 아니라 `scan()` 함수를 직접 import해서 씀):
+
+```bash
+python -m scanners.pipeline.xss --targets configs/lumi_market_1_xss_targets.example.json --base-url http://127.0.0.1:5001
+```
+
+`lab_app`의 기본 포트는 `LAB_1_PORT` 환경변수로 정해지며 기본값은 `5001`입니다(`docs/vulnerable-lab-1.md`). 다른 포트로 띄웠다면 `--base-url`을 맞춰서 넘기면 됩니다.
+
+**실행 계약에 명시되지 않아 실용적으로 채운 부분** (통합 담당과 추후 확인 필요):
+
+- `base_url`: 계약의 target manifest에는 최상위에 `base_url`이 있지만, `scan()` 함수 시그니처 자체에는 전달 방법이 없어 키워드 인자로 받습니다.
+- `TargetCase.verification_mode`(`"reflected"`/`"stored"`): Stored XSS의 2단계 검증(주입 후 별도 조회) 여부를 정하는 값인데, Contract A의 정식 필드에는 이를 표현할 곳이 없어 매니페스트 JSON에 추가 필드로 넣었습니다.
+- `auth_profile`/`requires_pre_auth=true` 케이스의 인증 흐름은 아직 설계하지 않았습니다. 지금 두 케이스는 모두 인증이 필요 없어 문제가 안 되지만, 해당 케이스를 만나면 `NotImplementedError`를 던지도록 명시적으로 막아뒀습니다.
+- `payload_profile`(AI가 안정적인 `payload_case_id`를 부여해 생성하는 방식)은 아직 합의되지 않아 이번 구현에서 완전히 배제했습니다. 대신 고정된 소규모 페이로드 목록을 기본값으로 사용합니다.
 
 ### 5. 대시보드 실행
 

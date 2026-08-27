@@ -1,0 +1,39 @@
+[
+  {
+    "case_id": "xss-search-reflected",
+    "vuln_type": "XSS",
+    "path": "/search",
+    "method": "GET",
+    "input": {
+      "location": "query",
+      "parameters": { "q": "baseline" },
+      "attack_parameter": "q"
+    },
+    "requires_pre_auth": false,
+    "auth_profile": null,
+    "payload_profile": "xss-v1",
+    "manual_verification_profile": "xss-reflection",
+    "verification_mode": "reflected"
+  },
+  {
+    "case_id": "xss-reviews-stored",
+    "vuln_type": "XSS",
+    "path": "/reviews",
+    "method": "POST",
+    "input": {
+      "location": "form",
+      "parameters": {
+        "author": "tester",
+        "title": "review title",
+        "content": "baseline content",
+        "rating": "5"
+      },
+      "attack_parameter": "content"
+    },
+    "requires_pre_auth": false,
+    "auth_profile": null,
+    "payload_profile": "xss-v1",
+    "manual_verification_profile": "xss-stored",
+    "verification_mode": "stored"
+  }
+]

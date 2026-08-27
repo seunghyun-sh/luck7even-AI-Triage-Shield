@@ -132,3 +132,34 @@ class RunEnvelope:
     status: str  # run status enum
     findings: list[RawFinding] = field(default_factory=list)
     schema_version: str = SCHEMA_VERSION
+
+
+# ============================================================
+# Contract A: target manifest (docs/data-contracts-v1.md 3장)
+# ============================================================
+# 생산자는 환경 구축팀, 소비자는 우리(XSS·SQLi 스캐너)다. scanners/pipeline/xss.py가
+# 이 타입으로 매니페스트 JSON을 읽어들인다.
+
+
+@dataclass
+class TargetCase:
+    """Contract A의 target 항목 1개.
+
+    계약이 정의하지 않은 필드도 하나 들어있다: verification_mode(아래 참고).
+    """
+
+    case_id: str
+    vuln_type: str
+    path: str  # "/"로 시작하는 상대 경로
+    method: str  # "GET" | "POST"
+    input_location: str  # "query" | "form" | "json"
+    input_parameters: dict[str, str]  # 정상 기준값(비밀값 아님)
+    attack_parameter: str  # input_parameters에 존재해야 함
+    requires_pre_auth: bool
+    auth_profile: str | None
+    payload_profile: str
+    manual_verification_profile: str
+    # 계약에 없는 확장 필드: "reflected"(기본) | "stored". Stored XSS는 주입 후
+    # 별도 조회 요청으로 저장 여부까지 확인해야 하는데, Contract A에는 이걸 표현할
+    # 필드가 없어서 우리가 임시로 추가했다. 통합 담당과 추후 확인 필요.
+    verification_mode: str = "reflected"

@@ -17,6 +17,7 @@ XSS도 탐지하는데, 이건 계약에 없는 값이라 편의상 "header"를 
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -185,6 +186,22 @@ def compute_run_status(findings: list[RawFinding]) -> str:
     return "FAILED"
 
 
+def _write_atomic(path: Path, content: str) -> None:
+    """임시 파일에 쓰고 flush한 뒤 rename하는 원자적 쓰기.
+
+    실행 계약(11.4) 요구사항: "응답 파일은 임시 파일에 쓴 뒤 rename한다" --
+    쓰는 도중에 프로세스가 죽거나 다른 프로세스가 같은 파일을 읽어도 항상
+    완전한 내용이거나 이전 내용만 보이게 하기 위함이다(부분적으로 쓰인 파일이
+    보이는 경우를 없앤다).
+    """
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
+        f.write(content)
+        f.flush()
+        os.fsync(f.fileno())
+    tmp_path.replace(path)
+
+
 def write_sidecar_html(run_dir: Path, finding_id: str, html: str) -> str:
     """응답 본문 전체를 run 디렉터리 아래 responses/<finding_id>.html로 저장한다.
 
@@ -193,7 +210,7 @@ def write_sidecar_html(run_dir: Path, finding_id: str, html: str) -> str:
     responses_dir = run_dir / "responses"
     responses_dir.mkdir(parents=True, exist_ok=True)
     file_path = responses_dir / f"{finding_id}.html"
-    file_path.write_text(html, encoding="utf-8")
+    _write_atomic(file_path, html)
     return f"responses/{finding_id}.html"
 
 
@@ -201,8 +218,5 @@ def write_run_envelope(run_dir: Path, envelope: RunEnvelope) -> Path:
     """RunEnvelope 전체를 <run_dir>/findings.json으로 저장한다."""
     run_dir.mkdir(parents=True, exist_ok=True)
     findings_path = run_dir / "findings.json"
-    findings_path.write_text(
-        json.dumps(asdict(envelope), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    _write_atomic(findings_path, json.dumps(asdict(envelope), ensure_ascii=False, indent=2))
     return findings_path
