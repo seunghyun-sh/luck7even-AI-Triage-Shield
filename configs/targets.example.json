@@ -1,30 +1,116 @@
-[
-  {
-    "target_id": "xss-a",
-    "vuln_type": "XSS",
-    "url": "/case/xss-a",
-    "method": "GET",
-    "parameter": "name"
+{
+  "schema_version": "1.0",
+  "target_set_id": "local-lab-v1",
+  "base_url": "http://127.0.0.1:5000",
+  "request_policy": {
+    "timeout_seconds": 10,
+    "follow_redirects": false
   },
-  {
-    "target_id": "xss-b",
-    "vuln_type": "XSS",
-    "url": "/case/xss-b",
-    "method": "GET",
-    "parameter": "name"
-  },
-  {
-    "target_id": "sqli-a",
-    "vuln_type": "SQLI",
-    "url": "/case/sqli-a",
-    "method": "GET",
-    "parameter": "id"
-  },
-  {
-    "target_id": "sqli-b",
-    "vuln_type": "SQLI",
-    "url": "/case/sqli-b",
-    "method": "GET",
-    "parameter": "id"
-  }
-]
+  "targets": [
+    {
+      "case_id": "xss-reflected-a",
+      "vuln_type": "XSS",
+      "path": "/case/xss-a",
+      "method": "GET",
+      "input": {
+        "location": "query",
+        "parameters": {"name": "baseline"},
+        "attack_parameter": "name"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "xss-v1",
+      "manual_verification_profile": "xss-reflection"
+    },
+    {
+      "case_id": "xss-reflected-b",
+      "vuln_type": "XSS",
+      "path": "/case/xss-b",
+      "method": "GET",
+      "input": {
+        "location": "query",
+        "parameters": {"name": "baseline"},
+        "attack_parameter": "name"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "xss-v1",
+      "manual_verification_profile": "xss-reflection"
+    },
+    {
+      "case_id": "xss-reflected-c",
+      "vuln_type": "XSS",
+      "path": "/case/xss-c",
+      "method": "GET",
+      "input": {
+        "location": "query",
+        "parameters": {"name": "baseline"},
+        "attack_parameter": "name"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "xss-v1",
+      "manual_verification_profile": "xss-reflection"
+    },
+    {
+      "case_id": "sqli-search-a",
+      "vuln_type": "SQLI",
+      "path": "/case/sqli-a",
+      "method": "GET",
+      "input": {
+        "location": "query",
+        "parameters": {"id": "1"},
+        "attack_parameter": "id"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "sqli-default",
+      "manual_verification_profile": "sqli-response-difference"
+    },
+    {
+      "case_id": "sqli-search-b",
+      "vuln_type": "SQLI",
+      "path": "/case/sqli-b",
+      "method": "GET",
+      "input": {
+        "location": "query",
+        "parameters": {"id": "1"},
+        "attack_parameter": "id"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "sqli-default",
+      "manual_verification_profile": "sqli-response-difference"
+    },
+    {
+      "case_id": "sqli-search-c",
+      "vuln_type": "SQLI",
+      "path": "/case/sqli-c",
+      "method": "GET",
+      "input": {
+        "location": "query",
+        "parameters": {"id": "1"},
+        "attack_parameter": "id"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "sqli-default",
+      "manual_verification_profile": "sqli-response-difference"
+    },
+    {
+      "case_id": "sqli-search-d",
+      "vuln_type": "SQLI",
+      "path": "/case/sqli-d",
+      "method": "GET",
+      "input": {
+        "location": "query",
+        "parameters": {"id": "1"},
+        "attack_parameter": "id"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "sqli-default",
+      "manual_verification_profile": "sqli-response-difference"
+    }
+  ]
+}
