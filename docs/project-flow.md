@@ -20,7 +20,7 @@
 - Excel은 최종 보안 보고서가 아닌 **담당자 검토용 초안**으로 제공한다.
 - S3, 대시보드 내 스캔 실행, 승인·반려와 최종 보고서 발행은 MVP에서 제외한다.
 
-이 권장안을 기준으로 `data-contracts-v1.md`, 기능명세서, 기술명세서와 샘플 데이터를 동기화했다. 팀 승인 전까지 v1 후보 계약으로 취급한다.
+이 권장안을 기준으로 `data-contracts-v1.md`, `execution-contract-v1.md`, 기능명세서, 기술명세서와 샘플 데이터를 동기화했다. 팀 승인 전까지 v1 후보 계약으로 취급한다.
 
 ## 2. 프로젝트 정의와 제품 경계
 
@@ -377,4 +377,4 @@ AWS 허가된 실습 웹사이트
 6. 전체 파이프라인의 최종 판정 정책과 end-to-end 지표 정의
 7. partial 실행을 대시보드에서 허용할지 여부
 
-팀은 `data-contracts-v1.md`, `dashboard-functional-spec.md`, `dashboard-technical-spec.md`와 테스트용 JSON을 함께 검토하고 승인한다. 승인 후 필드 변경은 계약 변경 절차를 따른다.
+팀은 `data-contracts-v1.md`, `execution-contract-v1.md`, `dashboard-functional-spec.md`, `dashboard-technical-spec.md`와 테스트용 JSON을 함께 검토하고 승인한다. 승인 후 필드 변경은 계약 변경 절차를 따른다.
