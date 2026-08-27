@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Self
 
+from analysis.models import ProcessedRun, RawRun
+
 from .models import (
     ExecutionStage,
     ExecutionStatus,
@@ -210,6 +212,24 @@ class RunStore:
     def pipeline_lock(self, scan_run_id: str) -> PipelineLock:
         return PipelineLock(self.data_root, scan_run_id)
 
+    def publish_raw(self, raw_run: RawRun) -> str:
+        """Validate and atomically publish a canonical raw artifact."""
+
+        raw_run = RawRun.model_validate(raw_run.model_dump(mode="json"))
+        path = self.data_root / "raw" / raw_run.scan_run_id / "findings.json"
+        self._atomic_write_json(path, raw_run.model_dump(mode="json"))
+        return f"raw/{raw_run.scan_run_id}/findings.json"
+
+    def publish_processed(self, processed_run: ProcessedRun) -> str:
+        """Validate and atomically publish a canonical processed artifact."""
+
+        processed_run = ProcessedRun.model_validate(
+            processed_run.model_dump(mode="json")
+        )
+        path = self.data_root / "processed" / processed_run.scan_run_id / "results.json"
+        self._atomic_write_json(path, processed_run.model_dump(mode="json"))
+        return f"processed/{processed_run.scan_run_id}/results.json"
+
     def _run_dir(self, scan_run_id: str) -> Path:
         return self.runs_dir / _validate_run_id(scan_run_id)
 
@@ -297,6 +317,7 @@ class RunStore:
 
     @staticmethod
     def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
         try:
             with temporary_path.open("x", encoding="utf-8") as artifact:
