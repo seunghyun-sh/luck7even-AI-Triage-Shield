@@ -296,6 +296,9 @@ def scan(
   해당 run 내부의 응답 증거 저장 경로, 인증 profile resolver만 제공하는 블랙박스 실행 문맥
 - `on_progress`: 현재 단계의 절대 `completed`, `total` 건수를 `main.py`에 전달하는 callback
 
+기존 `scan(targets, scan_run_id, on_progress)` 계약에서 이전하는 방법과 담당자별
+확인 목록은 [`scanner-integration-migration.md`](scanner-integration-migration.md)를 참고한다.
+
 ### 11.2 출력
 
 - `docs/data-contracts-v1.md` Contract B와 일치하는 RawFinding 목록
