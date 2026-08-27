@@ -124,8 +124,13 @@ def build_completed_scan(
     )
 
 
-def build_failed_scan(request: ScanRequest, exc: Exception) -> ScanResult:
-    """요청 자체가 실패한 경우의 scan 객체를 만든다. response/rule은 모두 null."""
+def _build_failed_scan(request: ScanRequest, error: ErrorDetail) -> ScanResult:
+    """실패 scan 객체(response/rule 전부 null + error)를 만든다.
+
+    계약상 FAILED scan은 response의 모든 필드가 null이어야 한다(ScanResult
+    검증기). 그래서 실제로 응답을 받았더라도(예: 404) 그 상태 코드는 구조화된
+    필드가 아니라 error.message에만 남긴다.
+    """
     return ScanResult(
         status=ScanStatus.FAILED,
         request=request,
@@ -137,7 +142,31 @@ def build_failed_scan(request: ScanRequest, exc: Exception) -> ScanResult:
             html_path=None,
         ),
         rule=ScanRule(label=None, reason=None),
-        error=build_scan_error(exc),
+        error=error,
+    )
+
+
+def build_failed_scan(request: ScanRequest, exc: Exception) -> ScanResult:
+    """요청 자체가 예외로 실패한 경우의 scan 객체를 만든다. response/rule은 모두 null."""
+    return _build_failed_scan(request, build_scan_error(exc))
+
+
+def build_not_found_scan(request: ScanRequest) -> ScanResult:
+    """대상 경로가 404를 반환한 경우의 scan 객체를 만든다.
+
+    스캐너 통합 계약 변경 안내(8·9장): 404는 "안전(SAFE)"이 아니라 실패
+    Finding으로 보존해야 한다. 404는 주입 지점 자체가 존재하지 않는다는 뜻이라,
+    그 응답을 근거로 SAFE라고 판정하면 실제로는 테스트가 수행되지 않았는데도
+    안전하다고 오판(거짓 음성)하게 된다. 같은 경로를 다시 요청해도 404가 바뀌지
+    않으므로 retryable=False로 둔다.
+    """
+    return _build_failed_scan(
+        request,
+        ErrorDetail(
+            code="SCAN_TARGET_NOT_FOUND",
+            message="대상 경로가 404 Not Found를 반환하여 주입 지점을 확인할 수 없습니다.",
+            retryable=False,
+        ),
     )
 
 

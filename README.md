@@ -166,7 +166,8 @@ RawFinding 1건 = 요청 1번:
 
 - `case_id`는 `<매니페스트 case_id>::<payload_case_id>` 형태입니다. 매니페스트의 `case_id`는 실행마다 바뀌지 않고, `payload_case_id`는 payload_profile 안에서 안정적입니다.
 - `rule.label`은 `RuleLabel.SUSPECTED`/`RuleLabel.SAFE`/`null`만 씁니다. 내부적으로는 더 세분화된 판정(그대로 반사/이스케이프되어 반사/저장 확인됨/반사 안 됨, `scanners/xss_rules.py`)을 쓰지만, 세부 내용은 `rule.reason`과 `response.evidence_summary` 텍스트로 남기고 공개 필드는 계약값으로 압축합니다.
-- 요청 자체가 실패하면(타임아웃 등) `scan.status="FAILED"`이고 `response`/`rule`은 모두 `null`, `error`에 `{code, message, retryable}`이 채워집니다. 실패한 시도도 삭제하지 않고 그대로 기록합니다.
+- 요청 자체가 실패하면(타임아웃, 연결 실패 등) `scan.status="FAILED"`이고 `response`/`rule`은 모두 `null`, `error`에 `{code, message, retryable}`이 채워집니다. 실패한 시도도 삭제하지 않고 그대로 기록합니다.
+- 대상 경로가 **404**를 반환하면(주입 지점 자체가 없음) `SAFE`로 판정하지 않고 위와 같은 실패 Finding(`error.code="SCAN_TARGET_NOT_FOUND"`)으로 보존합니다. 스캐너 통합 계약 변경 안내(8·9장) 요구사항으로, 테스트가 실제로 수행되지 않았는데 안전하다고 오판(거짓 음성)하는 것을 막기 위함입니다.
 
 ### 5. 대시보드 실행
 

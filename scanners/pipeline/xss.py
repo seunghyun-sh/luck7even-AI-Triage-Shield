@@ -148,6 +148,13 @@ def _scan_one(
         scan = xss_report.build_failed_scan(scan_request, e)
         return xss_report.make_finding(case_id, finding_id, scan)
 
+    if response.status_code == 404:
+        # 404 = 주입 지점 자체가 없음. 스캐너 통합 계약 변경 안내(8·9장)에 따라
+        # SAFE로 판정하지 않고 실패 Finding으로 보존한다(테스트가 실제로
+        # 수행되지 않았는데 안전하다고 오판하는 것을 막는다).
+        scan = xss_report.build_not_found_scan(scan_request)
+        return xss_report.make_finding(case_id, finding_id, scan)
+
     internal_label = xss_rules.classify_reflection(payload, response.text)
     response_body = response.text
 
