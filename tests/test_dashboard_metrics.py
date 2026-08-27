@@ -116,6 +116,10 @@ def test_aggregations_follow_dashboard_rules() -> None:
         "total_findings": 6,
         "ai_vulnerable": 2,
         "ai_inconclusive": 1,
+        "scan_completed": 5,
+        "scan_failed": 1,
+        "ai_completed": 5,
+        "ai_not_requested": 0,
         "ai_failed": 1,
         "needs_human_review": 3,
         "rule_suspected": 3,
@@ -141,10 +145,50 @@ def test_aggregations_follow_dashboard_rules() -> None:
 def test_empty_findings_are_safe() -> None:
     empty = pd.DataFrame()
 
-    assert build_summary(empty)["total_findings"] == 0
+    assert build_summary(empty) == {
+        "total_findings": 0,
+        "ai_vulnerable": 0,
+        "ai_inconclusive": 0,
+        "scan_completed": 0,
+        "scan_failed": 0,
+        "ai_completed": 0,
+        "ai_not_requested": 0,
+        "ai_failed": 0,
+        "needs_human_review": 0,
+        "rule_suspected": 0,
+    }
     assert build_type_counts(empty).empty
     assert build_ai_verdict_counts(empty).empty
     assert build_rule_ai_comparison(empty).empty
+
+
+def test_summary_counts_only_canonical_statuses() -> None:
+    findings = _findings().iloc[:2].copy()
+    findings.loc[0, "scan_status"] = None
+    findings.loc[0, "ai_status"] = "UNKNOWN"
+    findings.loc[1, "scan_status"] = "completed"
+    findings.loc[1, "ai_status"] = "failed"
+
+    summary = build_summary(findings)
+
+    assert {
+        key: summary[key]
+        for key in (
+            "scan_completed",
+            "scan_failed",
+            "ai_completed",
+            "ai_not_requested",
+            "ai_failed",
+        )
+    } == {
+        "scan_completed": 0,
+        "scan_failed": 0,
+        "ai_completed": 0,
+        "ai_not_requested": 0,
+        "ai_failed": 0,
+    }
+    assert build_ai_verdict_counts(findings).empty
+    assert build_rule_ai_comparison(findings).empty
 
 
 def test_evaluation_reports_cohort_metrics_exclusions_and_error_cases() -> None:
