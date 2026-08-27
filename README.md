@@ -132,13 +132,13 @@ python main.py --targets configs/targets.example.json
 
 현재 `main.py`는 대상 설정 경로만 확인하는 골격이며 스캐너·AI 처리·결과 저장은 아직 실행하지 않습니다.
 
-### 5. 대시보드 골격 실행
+### 5. 대시보드 실행
 
 ```bash
 streamlit run dashboard/app.py
 ```
 
-현재 대시보드는 안내 화면만 표시합니다. 목표 파이프라인은 [`docs/project-flow.md`](docs/project-flow.md), 팀 간 데이터 규격은 [`docs/data-contracts-v1.md`](docs/data-contracts-v1.md)를 참고하세요.
+기본 실행 시 계약 v1 샘플 결과를 자동으로 불러옵니다. 사이드바에서 processed JSON과 SQLi ground-truth JSON을 업로드할 수 있으며, 결과 검토·필터·차트·조건부 평가와 Excel 초안 다운로드를 제공합니다. 목표 파이프라인은 [`docs/project-flow.md`](docs/project-flow.md), 팀 간 데이터 규격은 [`docs/data-contracts-v1.md`](docs/data-contracts-v1.md)를 참고하세요.
 
 ## 협업 규칙
 
@@ -150,4 +150,4 @@ streamlit run dashboard/app.py
 
 ## 현재 상태
 
-현재 저장소는 초기 골격 단계입니다. 실행 가능한 공통 데이터 계약과 스캐너·AI 분석·대시보드·보고서 기능은 아직 구현되지 않았으며 각 담당 브랜치에서 개발합니다.
+계약 v1 Pydantic 모델과 샘플 기반 Streamlit 결과 검토·통계·조건부 평가·Excel 초안 기능이 구현되어 있습니다. XSS·SQLi 스캐너, OpenAI 분석과 `main.py` 통합 파이프라인은 아직 골격 단계이며 각 담당 브랜치에서 개발합니다.
