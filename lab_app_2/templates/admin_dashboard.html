@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}운영자 센터 | NovaStream{% endblock %}
+{% block content %}
+  <section class="admin-shell">
+    <div class="admin-heading">
+      <div>
+        <p class="eyebrow">OPERATIONS CONSOLE</p>
+        <h1>운영자 센터</h1>
+        <p>콘텐츠와 사용자 리뷰 상태를 확인합니다.</p>
+      </div>
+      <span class="lab-badge">LAB ACCESS · NO AUTH</span>
+    </div>
+
+    <div class="metric-grid">
+      <article><span>등록 콘텐츠</span><strong>{{ title_count }}</strong><small>Titles</small></article>
+      <article><span>사용자 리뷰</span><strong>{{ review_count }}</strong><small>Reviews</small></article>
+      <article><span>서비스 상태</span><strong class="status-ok">정상</strong><small>Online</small></article>
+    </div>
+
+    <div class="admin-actions">
+      <a href="{{ url_for('admin_reviews') }}">
+        <span>REVIEW MODERATION</span>
+        <h2>사용자 리뷰 관리</h2>
+        <p>등록된 리뷰의 내용과 처리 상태를 확인합니다.</p>
+      </a>
+      <a href="{{ url_for('catalog') }}">
+        <span>CATALOG</span>
+        <h2>콘텐츠 DB 검색</h2>
+        <p>제목과 장르를 기준으로 콘텐츠 정보를 조회합니다.</p>
+      </a>
+    </div>
+  </section>
+{% endblock %}

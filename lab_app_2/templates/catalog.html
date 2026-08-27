@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}콘텐츠 검색 | NovaStream{% endblock %}
+{% block content %}
+  <section class="page-shell">
+    <p class="eyebrow">CATALOG DATABASE</p>
+    <h1>콘텐츠 검색</h1>
+    <p class="page-intro">제목이나 장르로 NovaStream 카탈로그를 검색하세요.</p>
+
+    <form class="search-form" method="get">
+      <label for="catalog-q">제목 또는 장르</label>
+      <div class="search-row">
+        <input id="catalog-q" name="q" value="{{ query }}" placeholder="예: SF" autocomplete="off">
+        <button class="button primary" type="submit">검색</button>
+      </div>
+    </form>
+
+    {% if error %}
+      <div class="error-box"><strong>Database error</strong><pre>{{ error }}</pre></div>
+    {% endif %}
+
+    <div class="result-heading">
+      <h2>{% if query %}검색 결과{% else %}전체 콘텐츠{% endif %}</h2>
+      <span>{{ titles | length }}건</span>
+    </div>
+    <div class="result-list">
+      {% for title in titles %}
+        <a class="result-card" href="{{ url_for('title_detail', title_id=title.id) }}">
+          <div class="result-poster poster-{{ title.accent }}">{{ title.name[0] }}</div>
+          <div>
+            <h3>{{ title.name }}</h3>
+            <p>{{ title.year }} · {{ title.genre }} · {{ title.rating }}</p>
+            <span>{{ title.synopsis }}</span>
+          </div>
+        </a>
+      {% else %}
+        <div class="empty-state">일치하는 콘텐츠가 없습니다.</div>
+      {% endfor %}
+    </div>
+  </section>
+{% endblock %}

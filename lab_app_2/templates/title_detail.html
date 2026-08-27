@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}{{ title.name }} | NovaStream{% endblock %}
+{% block content %}
+  <section class="detail-hero poster-{{ title.accent }}">
+    <div class="detail-copy">
+      <p class="eyebrow">NOVASTREAM TITLE</p>
+      <h1>{{ title.name }}</h1>
+      <p class="detail-meta">{{ title.year }} · {{ title.genre }} · {{ title.rating }}</p>
+      <p>{{ title.synopsis }}</p>
+    </div>
+  </section>
+
+  <section class="page-shell review-layout">
+    <div>
+      <p class="eyebrow">AUDIENCE REVIEWS</p>
+      <h2>시청자 리뷰</h2>
+      <div class="review-list">
+        {% for review in reviews %}
+          <article class="review-card">
+            <strong>{{ review.nickname }}</strong>
+            <p>{{ review.body }}</p>
+            <span>{{ review.status }}</span>
+          </article>
+        {% else %}
+          <div class="empty-state">첫 번째 리뷰를 남겨보세요.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <aside class="review-form-card">
+      <p class="eyebrow">WRITE A REVIEW</p>
+      <h2>리뷰 작성</h2>
+      {% if request.args.get('saved') %}<p class="success-message">리뷰가 등록되었습니다.</p>{% endif %}
+      <form method="post" action="{{ url_for('add_review', title_id=title.id) }}">
+        <label for="nickname">닉네임</label>
+        <input id="nickname" name="nickname" value="viewer" maxlength="80" required>
+        <label for="body">리뷰 내용</label>
+        <textarea id="body" name="body" rows="7" required></textarea>
+        <button class="button primary full-button" type="submit">리뷰 등록</button>
+      </form>
+    </aside>
+  </section>
+{% endblock %}

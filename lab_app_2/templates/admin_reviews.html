@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}리뷰 관리 | NovaStream{% endblock %}
+{% block content %}
+  <section class="admin-shell">
+    <div class="admin-heading">
+      <div>
+        <p class="eyebrow">REVIEW MODERATION</p>
+        <h1>사용자 리뷰 관리</h1>
+        <p>콘텐츠에 등록된 리뷰를 운영자 권한으로 검토합니다.</p>
+      </div>
+      <form method="post" action="{{ url_for('clear_reviews') }}">
+        <button class="button danger-button" type="submit">테스트 리뷰 초기화</button>
+      </form>
+    </div>
+
+    <div class="admin-table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr><th>ID</th><th>콘텐츠</th><th>작성자</th><th>리뷰</th><th>상태</th></tr>
+        </thead>
+        <tbody>
+          {% for review in reviews %}
+            <tr>
+              <td>#{{ review.id }}</td>
+              <td>{{ review.title_name }}</td>
+              <td>{{ review.nickname }}</td>
+              <!-- INTENTIONALLY VULNERABLE: stored XSS scanner target. -->
+              <td class="stored-review">{{ review.body | safe }}</td>
+              <td><span class="status-pill">{{ review.status }}</span></td>
+            </tr>
+          {% else %}
+            <tr><td colspan="5" class="empty-cell">등록된 리뷰가 없습니다.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}
