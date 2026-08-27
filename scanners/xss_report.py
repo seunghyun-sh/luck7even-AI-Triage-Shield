@@ -6,12 +6,8 @@ docs/data-contracts-v1.md가 정한 rule.label(SUSPECTED/SAFE/null)로 압축하
 본문 전체를 JSON에 직접 넣지 않고 run 디렉터리 아래 sidecar HTML 파일로 저장한
 뒤, 그 상대 경로만 JSON에 남긴다(계약 4.5, "HTML 원문은 Git에 등록하지 않는다").
 
-주의(계약과의 차이점): 계약의 input_location enum은 "query"/"form"/"json" 세
-값만 정의한다. 이 스캐너는 bWAPP의 User-Agent/Referer/커스텀 헤더 반사형
-XSS도 탐지하는데, 이건 계약에 없는 값이라 편의상 "header"를 추가로 사용한다.
-이는 아직 팀 합의를 거치지 않은 확장이므로, 이 값을 소비하는 쪽(OpenAI·데이터
-처리 담당)이 생기면 계약 문서에 반영하고 버전을 올리는 절차(계약 8장)를
-따라야 한다.
+scanners/pipeline/xss.py(실제 실습 환경을 대상으로 하는 계약 준수 스캐너)가
+이 모듈의 판정·조립 로직을 그대로 가져다 쓴다.
 """
 
 from __future__ import annotations

@@ -163,3 +163,8 @@ class TargetCase:
     # 별도 조회 요청으로 저장 여부까지 확인해야 하는데, Contract A에는 이걸 표현할
     # 필드가 없어서 우리가 임시로 추가했다. 통합 담당과 추후 확인 필요.
     verification_mode: str = "reflected"
+    # 계약에 없는 확장 필드: Stored XSS 확인용 조회 경로. 주입 경로(path)와 조회
+    # 경로가 같으면 생략 가능(None이면 path를 그대로 재사용). NovaStream처럼 글
+    # 작성(POST /titles/<id>/reviews)과 실행 지점(GET /admin/reviews)이 다른
+    # 페이지인 경우에 필요하다.
+    verify_path: str | None = None

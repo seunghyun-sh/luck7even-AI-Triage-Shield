@@ -1,29 +1,40 @@
 """팀 실행 계약이 정의한 `scan(targets, scan_run_id, on_progress) -> list[RawFinding]`
 인터페이스를 구현하는 XSS 스캐너.
 
-`scanners/xss.py`(bWAPP 샷건 스캐너)와는 완전히 별도의 도구다. 그쪽은 공식
-실습 환경이 없던 시기에 우리가 임시로 검증하던 bWAPP 가상머신을 대상으로 하고,
-계약을 지킬 필요가 없다. 이 모듈은 실제로 main.py가 호출할 것을 전제로 Contract
+이전에 bWAPP 가상머신을 대상으로 하던 샷건 스캐너는 정식 실습 환경이 갖춰지면서
+더 이상 쓰지 않는다. 이 모듈은 실제로 main.py가 호출할 것을 전제로 Contract
 A(target manifest) 입력과 Contract B(raw findings) 출력을 계약대로 맞춘다.
 
-현재 대상: `lab_app/`(Lumi Market, 1번 실습 환경 -- feature/vulnerable-lab
-브랜치, docs/vulnerable-lab-1.md)에 정의된 두 케이스.
+대상 실습 환경 (모두 Flask, 각자 XSS 취약점이 있는 것으로 확인된 페이지만 다룬다):
 
-- XSS-01: Reflected, GET /search, query 파라미터 q
-- XSS-02: Stored, POST 후 GET /reviews, form 파라미터 content
+- 1번 환경: `lab_app/`(Lumi Market) -- feature/vulnerable-lab 브랜치,
+  docs/vulnerable-lab-1.md. 매니페스트: configs/lumi_market_1_xss_targets.example.json
+  - Reflected: GET /search, query 파라미터 q
+  - Stored: POST /reviews(작성) -> GET /reviews(같은 페이지에서 확인), form 파라미터 content
+- 2번 환경: `lab_app_2/`(NovaStream) -- feature/vulnerable-lab-2 브랜치,
+  lab_app_2/README.md. 매니페스트: configs/novastream_2_xss_targets.example.json
+  - Reflected: GET /discover, query 파라미터 q
+  - Stored: POST /titles/<id>/reviews(작성) -> GET /admin/reviews(다른 페이지에서 확인),
+    form 파라미터 body
+
+두 환경 모두 지금은 로컬(127.0.0.1)에서 실행하지만, 이후 서버에 배포될 예정이다.
+그래서 `base_url`을 코드에 고정하지 않고 항상 호출 시점에 인자로 받는다 --
+로컬이든 배포된 서버든 URL만 바꿔서 그대로 재사용할 수 있다.
 
 계약에 명시되지 않아 우리가 실용적으로 채운 부분 (통합 담당과 추후 확인 필요):
 
 - `base_url`: Contract A 매니페스트 최상위에는 base_url이 있지만, 실행 계약의
   `scan()` 시그니처 자체에는 이를 전달할 방법이 안 나와 있다. 일단 키워드
   인자로 받는다.
-- `TargetCase.verification_mode`("reflected"/"stored"): Stored XSS는 주입 후
-  별도 조회 요청으로 저장 여부까지 확인해야 하는데, Contract A의 정식 필드
-  중에는 이걸 표현할 곳이 없다(`manual_verification_profile`은 자유 문자열이라
-  자동화 분기에 쓰기엔 애매함). 그래서 매니페스트 JSON에 이 필드를 추가로
-  넣고 우리 로더가 읽어들인다.
-- `auth_profile`/`requires_pre_auth=true` 처리: 아직 설계되지 않았다. 이번
-  두 케이스는 모두 인증이 필요 없어서(`requires_pre_auth: false`) 당장은
+- `TargetCase.verification_mode`("reflected"/"stored")와 `verify_path`: Stored
+  XSS는 주입 후 별도 조회 요청으로 저장 여부까지 확인해야 하는데, Contract A의
+  정식 필드 중에는 이걸 표현할 곳이 없다(`manual_verification_profile`은 자유
+  문자열이라 자동화 분기에 쓰기엔 애매함). 그래서 매니페스트 JSON에 이 두 필드를
+  추가로 넣고 우리 로더가 읽어들인다. `verify_path`는 작성 페이지와 확인 페이지가
+  다를 때만 쓰고(NovaStream의 관리자 리뷰 페이지처럼), 같으면 생략해도 된다
+  (생략 시 path를 그대로 재사용).
+- `auth_profile`/`requires_pre_auth=true` 처리: 아직 설계되지 않았다. 지금까지
+  확인된 XSS 케이스는 모두 인증이 필요 없어서(`requires_pre_auth: false`) 당장은
   문제가 안 되지만, pre-auth 케이스가 추가되면 다시 논의해야 한다
   (`_run_one`에서 이 경우 NotImplementedError를 던지도록 명시적으로 막아둠).
 - `payload_profile`: AI가 안정적인 `payload_case_id`를 붙여 생성하는 방식은
@@ -79,6 +90,7 @@ def load_targets(manifest_path: Path) -> list[TargetCase]:
                 payload_profile=entry["payload_profile"],
                 manual_verification_profile=entry["manual_verification_profile"],
                 verification_mode=entry.get("verification_mode", "reflected"),
+                verify_path=entry.get("verify_path"),
             )
         )
     return targets
@@ -141,10 +153,13 @@ def _scan_one(
 
     if target.verification_mode == "stored":
         # 주입 응답만으로는 판단할 수 없으므로, 별도 조회 요청으로 실제 저장
-        # 여부까지 한 번 더 확인한다(scanners/xss.py의 stored XSS 검증과 동일한
-        # 아이디어). 조회 요청이 실패해도 주입 단계 결과를 그대로 유지한다.
+        # 여부까지 한 번 더 확인한다. 조회 요청이 실패해도 주입 단계 결과를
+        # 그대로 유지한다(판정을 낮추지 않음). 작성 페이지와 확인 페이지가
+        # 다른 경우(verify_path)도 지원한다 -- 예: NovaStream은 리뷰를
+        # /titles/<id>/reviews에 쓰고 /admin/reviews에서 이스케이프 없이 보여준다.
+        verify_url = urljoin(base_url, target.verify_path) if target.verify_path else url
         try:
-            verify_res = base.safe_request(session, "GET", url, timeout=timeout)
+            verify_res = base.safe_request(session, "GET", verify_url, timeout=timeout)
         except (requests.RequestException, UnicodeError):
             pass
         else:
@@ -215,9 +230,15 @@ def _main() -> None:
 
     from analysis.models import RunEnvelope
 
-    parser = argparse.ArgumentParser(description="lab_app(Lumi Market) XSS 계약 스캐너 로컬 실행")
-    parser.add_argument("--targets", type=Path, default=Path("configs/lumi_market_1_xss_targets.example.json"))
-    parser.add_argument("--base-url", default="http://127.0.0.1:5001")
+    parser = argparse.ArgumentParser(description="실습 환경 XSS 계약 스캐너 로컬 실행")
+    parser.add_argument(
+        "--targets",
+        type=Path,
+        required=True,
+        help="예: configs/lumi_market_1_xss_targets.example.json 또는 configs/novastream_2_xss_targets.example.json",
+    )
+    parser.add_argument("--base-url", required=True, help="예: http://127.0.0.1:5001 (배포 후에는 실제 서버 주소)")
+    parser.add_argument("--target-set-id", required=True, help="예: lumi-market-1, novastream-2")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     args = parser.parse_args()
 
@@ -232,7 +253,7 @@ def _main() -> None:
 
     envelope = RunEnvelope(
         scan_run_id=scan_run_id,
-        target_set_id="lumi-market-1",
+        target_set_id=args.target_set_id,
         started_at=started_at,
         completed_at=xss_report.now_iso(),
         status=xss_report.compute_run_status(findings),
