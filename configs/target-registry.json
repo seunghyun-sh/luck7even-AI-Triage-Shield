@@ -4,12 +4,12 @@
     {
       "target_set_id": "lumi-market-1",
       "manifest": "lumi_market_1_xss_targets.example.json",
-      "allowed_base_url": "http://127.0.0.1:5001"
+      "allowed_base_url": "http://127.0.0.1:5000"
     },
     {
       "target_set_id": "novastream-2",
       "manifest": "novastream_2_xss_targets.example.json",
-      "allowed_base_url": "http://127.0.0.1:5000"
+      "allowed_base_url": "http://127.0.0.1:5001"
     }
   ]
 }
