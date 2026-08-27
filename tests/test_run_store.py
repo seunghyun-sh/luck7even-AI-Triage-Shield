@@ -19,6 +19,10 @@ from orchestration.models import (
 )
 from orchestration.run_store import RunAlreadyActiveError, RunStore
 
+SAMPLE_PROCESSED_PATH = (
+    Path(__file__).resolve().parents[1] / "configs" / "triaged-results.example.json"
+)
+
 
 def _status(
     *,
@@ -44,6 +48,45 @@ def _status(
         processed_result_path=processed_result_path,
         error=error,
     )
+
+
+def _publish_reviewable_partial(store: RunStore) -> tuple[RunStatusDocument, Path]:
+    initial = store.create_run(
+        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+    )
+    running_time = initial.updated_at + timedelta(seconds=1)
+    running = initial.model_copy(
+        update={
+            "status": ExecutionStatus.RUNNING,
+            "stage": ExecutionStage.VALIDATING_TARGET,
+            "updated_at": running_time,
+        }
+    )
+    store.save_status(running)
+    completed_at = running_time + timedelta(seconds=1)
+    terminal = running.model_copy(
+        update={
+            "status": ExecutionStatus.PARTIAL,
+            "stage": None,
+            "updated_at": completed_at,
+            "completed_at": completed_at,
+            "raw_result_path": f"raw/{initial.scan_run_id}/findings.json",
+            "processed_result_path": f"processed/{initial.scan_run_id}/results.json",
+        }
+    )
+    store.save_status(terminal)
+    payload = json.loads(SAMPLE_PROCESSED_PATH.read_text(encoding="utf-8"))
+    payload.update(
+        {
+            "scan_run_id": initial.scan_run_id,
+            "target_set_id": initial.target_set_id,
+            "status": "PARTIAL",
+        }
+    )
+    path = store.data_root / "processed" / initial.scan_run_id / "results.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return terminal, path
 
 
 @pytest.mark.parametrize(
@@ -277,6 +320,63 @@ def test_active_run_status_rejects_malformed_or_terminal_owner(tmp_path: Path) -
         )
         store.save_status(failed)
         assert store.active_run_status() is None
+
+
+def test_reviewable_processed_run_requires_coupled_terminal_artifacts(
+    tmp_path: Path,
+) -> None:
+    store = RunStore(tmp_path / "data")
+    status, _ = _publish_reviewable_partial(store)
+
+    reviewed = store.load_reviewable_processed_run(status.scan_run_id)
+
+    assert reviewed.scan_run_id == status.scan_run_id
+    assert reviewed.target_set_id == status.target_set_id
+    assert reviewed.status.value == status.status.value
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("scan_run_id", "run-20260827-111500-a1b2c3"),
+        ("target_set_id", "other-target-set"),
+        ("status", "COMPLETED"),
+    ],
+)
+def test_reviewable_processed_run_rejects_mismatched_envelope(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    store = RunStore(tmp_path / "data")
+    status, path = _publish_reviewable_partial(store)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload[field] = value
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        store.load_reviewable_processed_run(status.scan_run_id)
+
+    assert str(store.data_root.resolve()) not in str(exc_info.value)
+    assert "{" not in str(exc_info.value)
+
+
+def test_reviewable_processed_run_rejects_malformed_and_symlink_artifacts(
+    tmp_path: Path,
+) -> None:
+    store = RunStore(tmp_path / "data")
+    status, path = _publish_reviewable_partial(store)
+    path.write_text("{malformed", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not available"):
+        store.load_reviewable_processed_run(status.scan_run_id)
+
+    symlink_status, path = _publish_reviewable_partial(store)
+    outside = tmp_path / "outside-results.json"
+    outside.write_text(SAMPLE_PROCESSED_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    path.unlink()
+    path.symlink_to(outside)
+
+    with pytest.raises(ValueError, match="not available"):
+        store.load_reviewable_processed_run(symlink_status.scan_run_id)
 
 
 def test_reconcile_orphaned_runs_fails_only_lockless_nonterminal_runs(

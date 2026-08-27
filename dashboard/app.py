@@ -159,10 +159,7 @@ def _available_processed_results() -> list[Path]:
     for run_dir in RUN_STORE.runs_dir.iterdir():
         if not run_dir.is_dir():
             continue
-        try:
-            result = _safe_processed_path(RUN_STORE.load_status(run_dir.name))
-        except (FileNotFoundError, ValueError):
-            continue
+        result = _safe_processed_path(run_dir.name)
         if result is not None:
             results.append(result)
     return sorted(
@@ -450,10 +447,7 @@ def _load_inputs() -> tuple[Any | None, Any | None]:
     preferred_run_id = st.session_state.get("review_scan_run_id")
     preferred_path = None
     if preferred_run_id:
-        try:
-            preferred_path = _safe_processed_path(RUN_STORE.load_status(preferred_run_id))
-        except (FileNotFoundError, ValueError):
-            pass
+        preferred_path = _safe_processed_path(preferred_run_id)
     default_mode = (
         "발견된 결과 사용"
         if preferred_path in available_results
@@ -521,35 +515,21 @@ def _available_target_manifests() -> list[tuple[Path, Any]]:
         return []
 
 
-def _safe_processed_path(status: Any) -> Path | None:
-    path = status.processed_result_path
-    if status.status.value not in {"COMPLETED", "PARTIAL"} or not path:
-        return None
-    if path != f"processed/{status.scan_run_id}/results.json":
-        return None
-    candidate = (DATA_ROOT / path).resolve()
+def _safe_processed_path(scan_run_id: str) -> Path | None:
+    """Return a reviewed run's canonical path after RunStore coupling validation."""
+
     try:
-        candidate.relative_to(DATA_ROOT.resolve())
-    except ValueError:
+        RUN_STORE.load_reviewable_processed_run(scan_run_id)
+    except (FileNotFoundError, ValueError):
         return None
-    return candidate if candidate.is_file() else None
+    return DATA_ROOT / "processed" / scan_run_id / "results.json"
 
 
 def _active_run_id() -> str | None:
-    """Find an active contract run from RunStore statuses, not session state."""
+    """Return only the nonterminal owner of the live advisory pipeline lock."""
 
-    if not RUN_STORE.runs_dir.is_dir():
-        return None
-    for run_dir in sorted(RUN_STORE.runs_dir.iterdir()):
-        if not run_dir.is_dir():
-            continue
-        try:
-            status = RUN_STORE.load_status(run_dir.name)
-        except (FileNotFoundError, ValueError):
-            continue
-        if status.status.value in ACTIVE_STATUSES:
-            return status.scan_run_id
-    return None
+    status = RUN_STORE.active_run_status()
+    return status.scan_run_id if status is not None else None
 
 
 def _render_run_status(scan_run_id: str, *, polling: bool) -> None:
@@ -587,11 +567,7 @@ def _render_run_status(scan_run_id: str, *, polling: bool) -> None:
 def _set_review_selection(scan_run_id: str) -> None:
     """Navigate only when the published artifact is still safe to review."""
 
-    try:
-        status = RUN_STORE.load_status(scan_run_id)
-    except (FileNotFoundError, ValueError):
-        return
-    if _safe_processed_path(status) is None:
+    if _safe_processed_path(scan_run_id) is None:
         return
     st.session_state["review_scan_run_id"] = scan_run_id
     st.session_state["dashboard_view"] = "결과 검토"
@@ -637,7 +613,7 @@ def _render_terminal_status(status: Any) -> None:
     st.markdown(f":{color}-badge[{status.status.value}]")
     st.write(status_text)
     _render_run_status(status.scan_run_id, polling=False)
-    processed_path = _safe_processed_path(status)
+    processed_path = _safe_processed_path(status.scan_run_id)
     if processed_path is not None:
         label = "이 결과 검토" if status.status.value == "COMPLETED" else "부분 결과 검토"
         st.button(
@@ -656,6 +632,8 @@ def _render_terminal_status(status: Any) -> None:
 def _render_execution_tab() -> None:
     st.subheader("진단 실행")
     active_run_id = _active_run_id()
+    if active_run_id is not None:
+        st.session_state["scan_run_id"] = active_run_id
     selected_run_id = active_run_id or st.session_state.get("scan_run_id")
     status = None
     if selected_run_id:

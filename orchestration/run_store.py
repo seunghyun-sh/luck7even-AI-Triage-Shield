@@ -383,6 +383,48 @@ class RunStore:
         self._atomic_write_json(path, processed_run.model_dump(mode="json"))
         return f"processed/{scan_run_id}/results.json"
 
+    def load_reviewable_processed_run(self, scan_run_id: str) -> ProcessedRun:
+        """Load a terminal processed result only when it is coupled to its run."""
+
+        scan_run_id = _validate_run_id(scan_run_id)
+        try:
+            request = self.load_request(scan_run_id)
+            status = self.load_status(scan_run_id)
+        except (OSError, ValueError) as error:
+            raise ValueError("Run artifacts are not available for review.") from error
+
+        expected_path = f"processed/{scan_run_id}/results.json"
+        if (
+            status.scan_run_id != scan_run_id
+            or status.target_set_id != request.target_set_id
+            or status.status not in {ExecutionStatus.COMPLETED, ExecutionStatus.PARTIAL}
+            or status.processed_result_path != expected_path
+        ):
+            raise ValueError("Run artifacts are not available for review.")
+
+        try:
+            canonical_path = (
+                self.data_root / "processed" / scan_run_id / "results.json"
+            )
+            if canonical_path.is_symlink():
+                raise ValueError
+            path = self._contained_artifact_path(
+                "processed", scan_run_id, "results.json"
+            )
+            if not path.is_file():
+                raise ValueError
+            processed_run = ProcessedRun.model_validate_json(path.read_bytes())
+        except (OSError, ValueError) as error:
+            raise ValueError("Run artifacts are not available for review.") from error
+
+        if (
+            processed_run.scan_run_id != scan_run_id
+            or processed_run.target_set_id != request.target_set_id
+            or processed_run.status.value != status.status.value
+        ):
+            raise ValueError("Run artifacts are not available for review.")
+        return processed_run
+
     def _validate_artifact_identity(
         self, scan_run_id: str, target_set_id: str
     ) -> str:

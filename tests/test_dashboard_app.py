@@ -51,6 +51,28 @@ def _terminal_run(store: RunStore, initial, status: ExecutionStatus) -> None:
     )
 
 
+def _write_processed_run(store: RunStore, initial, status: ExecutionStatus) -> Path:
+    payload = json.loads(SAMPLE_PATH.read_text())
+    payload.update(
+        {
+            "scan_run_id": initial.scan_run_id,
+            "target_set_id": initial.target_set_id,
+            "status": status.value,
+        }
+    )
+    if status is ExecutionStatus.COMPLETED:
+        payload["findings"] = [
+            finding
+            for finding in payload["findings"]
+            if finding["scan"]["status"] == "COMPLETED"
+            and finding["ai"]["status"] != "FAILED"
+        ]
+    path = PROCESSED_PATH / initial.scan_run_id / "results.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
 def _review(app: AppTest) -> AppTest:
     app.session_state["dashboard_view"] = "결과 검토"
     return app.run(timeout=30)
@@ -97,16 +119,69 @@ def test_active_run_is_rediscovered_and_hides_setup_controls() -> None:
     store = RunStore(PROCESSED_PATH.parent)
     status = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
     try:
+        with store.pipeline_lock(status.scan_run_id):
+            app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+            assert not app.exception
+            assert not any(selectbox.label == "허가된 대상 manifest" for selectbox in app.selectbox)
+            assert any("QUEUED" in markdown.value for markdown in app.markdown)
+            assert any(
+                status.scan_run_id in str(element.value) for element in app.get("json")
+            )
+    finally:
+        shutil.rmtree(PROCESSED_PATH.parent / "runs" / status.scan_run_id)
+
+
+def test_orphaned_nonterminal_run_does_not_hide_execution_setup() -> None:
+    store = RunStore(PROCESSED_PATH.parent)
+    orphan = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
+    try:
         app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
 
         assert not app.exception
-        assert not any(selectbox.label == "허가된 대상 manifest" for selectbox in app.selectbox)
-        assert any("QUEUED" in markdown.value for markdown in app.markdown)
         assert any(
-            status.scan_run_id in str(element.value) for element in app.get("json")
+            selectbox.label == "허가된 대상 manifest" for selectbox in app.selectbox
         )
     finally:
-        shutil.rmtree(PROCESSED_PATH.parent / "runs" / status.scan_run_id)
+        shutil.rmtree(PROCESSED_PATH.parent / "runs" / orphan.scan_run_id)
+
+
+def test_live_lock_owner_wins_over_orphaned_nonterminal_run() -> None:
+    store = RunStore(PROCESSED_PATH.parent)
+    orphan = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
+    live = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
+    try:
+        with store.pipeline_lock(live.scan_run_id):
+            app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+            assert any(
+                live.scan_run_id in str(element.value) for element in app.get("json")
+            )
+            assert not any(
+                orphan.scan_run_id in str(element.value) for element in app.get("json")
+            )
+    finally:
+        shutil.rmtree(PROCESSED_PATH.parent / "runs" / orphan.scan_run_id)
+        shutil.rmtree(PROCESSED_PATH.parent / "runs" / live.scan_run_id)
+
+
+def test_rediscovered_active_run_keeps_terminal_handoff_selection() -> None:
+    store = RunStore(PROCESSED_PATH.parent)
+    initial = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
+    results_path = _write_processed_run(store, initial, ExecutionStatus.PARTIAL)
+    try:
+        app = AppTest.from_file(str(APP_PATH))
+        with store.pipeline_lock(initial.scan_run_id):
+            app.run(timeout=30)
+            assert app.session_state["scan_run_id"] == initial.scan_run_id
+            _terminal_run(store, initial, ExecutionStatus.PARTIAL)
+
+        app.run(timeout=30)
+        assert _button(app, "부분 결과 검토")
+    finally:
+        results_path.unlink()
+        results_path.parent.rmdir()
+        shutil.rmtree(PROCESSED_PATH.parent / "runs" / initial.scan_run_id)
 
 
 def test_completed_and_partial_runs_offer_explicit_review_handoff() -> None:
@@ -116,9 +191,7 @@ def test_completed_and_partial_runs_offer_explicit_review_handoff() -> None:
     ):
         store = RunStore(PROCESSED_PATH.parent)
         initial = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
-        results_path = PROCESSED_PATH / initial.scan_run_id / "results.json"
-        results_path.parent.mkdir()
-        results_path.write_text(SAMPLE_PATH.read_text())
+        results_path = _write_processed_run(store, initial, terminal_status)
         try:
             _terminal_run(store, initial, terminal_status)
             app = AppTest.from_file(str(APP_PATH))
@@ -216,9 +289,16 @@ def test_dashboard_distinguishes_zero_run_from_filter_reset() -> None:
     initial = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
     results_path = PROCESSED_PATH / initial.scan_run_id / "results.json"
     zero_run = json.loads(SAMPLE_PATH.read_text())
-    zero_run.update({"status": "COMPLETED", "findings": []})
+    zero_run.update(
+        {
+            "scan_run_id": initial.scan_run_id,
+            "target_set_id": initial.target_set_id,
+            "status": "COMPLETED",
+            "findings": [],
+        }
+    )
     results_path.parent.mkdir()
-    results_path.write_text(json.dumps(zero_run))
+    results_path.write_text(json.dumps(zero_run), encoding="utf-8")
     try:
         _terminal_run(store, initial, ExecutionStatus.COMPLETED)
         app = AppTest.from_file(str(APP_PATH))
