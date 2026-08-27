@@ -1,5 +1,7 @@
 import os
 import json
+import hashlib
+import re
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -9,29 +11,87 @@ from analysis.prompts import get_triage_prompt
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-def analyze_finding(finding, base_dir):
-    """단일 Finding 객체를 분석하고 ai 필드를 덧붙여 반환합니다."""
+def load_cache(cache_path):
+    if os.path.exists(cache_path):
+        with open(cache_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+def save_cache(cache_path, cache_dict):
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    with open(cache_path, 'w', encoding='utf-8') as f:
+        json.dump(cache_dict, f, ensure_ascii=False, indent=2)
+
+# 1. 보안 필터링 함수
+def sanitize_and_extract_html(html_content, payload, max_length=1500):
+    """HTML 전체를 보내지 않고, 페이로드 주변부만 추출 및 다양한 민감정보를 완벽히 마스킹합니다."""
+    if not html_content:
+        return ""
+
+    safe_html = html_content
+
+    #1. PII (개인식별정보) 마스킹
+    # 전화번호 (010, 011, 02 등 광범위 적용)
+    safe_html = re.sub(r'01[0-9]-\d{3,4}-\d{4}', '01X-****-****', safe_html)
+    # 주민등록번호 형태 (6자리-7자리)
+    safe_html = re.sub(r'\d{6}-[1-4]\d{6}', '******-*******', safe_html)
+    # 이메일 주소
+    safe_html = re.sub(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '[EMAIL_REDACTED]', safe_html)
+    # 신용카드 번호 (16자리)
+    safe_html = re.sub(r'\d{4}-\d{4}-\d{4}-\d{4}', '****-****-****-****', safe_html)
+
+    # 2. Security Credentials (인증/보안 토큰) 마스킹
+    # JWT 토큰 (ey... 로 시작하는 긴 문자열)
+    safe_html = re.sub(r'ey[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.[A-Za-z0-9-_.+/=]*', '[JWT_REDACTED]', safe_html)
+    # CSRF, Session, Auth Token 등 (변수명 뒤에 오는 16자리 이상의 영문숫자)
+    safe_html = re.sub(r'(?i)(session_id|csrf_token|auth_token|access_token)["\'\s:=]+([a-zA-Z0-9_\-]{16,})', r'\1: [TOKEN_REDACTED]', safe_html)
+
+    # 3. 페이로드가 발견된 구간만 앞뒤로 잘라내기 (토큰 절약 및 구획화)
+    payload_idx = safe_html.find(payload)
+    if payload_idx != -1:
+        start = max(0, payload_idx - (max_length // 2))
+        end = min(len(safe_html), payload_idx + len(payload) + (max_length // 2))
+        snippet = safe_html[start:end]
+        return f"...[보안 필터링됨(전략)]...\n{snippet}\n...[보안 필터링됨(후략)]..."
+    else:
+        return safe_html[:max_length] + ("...[길이 초과로 절삭됨]" if len(safe_html) > max_length else "")
+
+def analyze_finding(finding, base_dir, cache_dict):
     scan_data = finding.get('scan', {})
     req_data = scan_data.get('request', {})
     res_data = scan_data.get('response', {})
 
-    # 1. Contract 4.5: HTML 원문 파일 읽기
+    payload = req_data.get('payload', '')
     html_path = res_data.get('html_path')
-    html_content = ""
+    raw_html_content = ""
+    
     if html_path:
         full_html_path = os.path.normpath(os.path.join(base_dir, html_path))
         try:
             with open(full_html_path, 'r', encoding='utf-8') as f:
-                html_content = f.read()
+                raw_html_content = f.read()
         except Exception as e:
-            html_content = f"[HTML 파일 읽기 실패: {str(e)}]"
+            raw_html_content = f"[HTML 파일 읽기 실패: {str(e)}]"
 
-    # 2. AI 프롬프트 생성 및 요청
+    # 2. 전체 HTML 대신 필터링된 조각(Snippet) 생성
+    safe_html_snippet = sanitize_and_extract_html(raw_html_content, payload)
+
+    # 3. 캐시 지문은 필터링된 안전한 본문 기준으로 생성
+    hash_input = f"{payload}|||{safe_html_snippet}"
+    cache_key = hashlib.sha256(hash_input.encode('utf-8')).hexdigest()
+
+    if cache_key in cache_dict:
+        print(f"동일한 패턴 발견")
+        finding["ai"] = cache_dict[cache_key]
+        return finding
+
+    print(f"새로운 패턴. OpenAI API를 호출합니다.")
+    # 전체 HTML 대신 필터링된 증거(safe_html_snippet)만 AI에게 전달
     prompt = get_triage_prompt(
         url=req_data.get('url', 'N/A'),
         parameter=req_data.get('parameter', 'N/A'),
-        payload=req_data.get('payload', 'N/A'),
-        html_content=html_content
+        payload=payload,
+        html_content=safe_html_snippet 
     )
 
     try:
@@ -46,8 +106,6 @@ def analyze_finding(finding, base_dir):
         )
         
         ai_result = json.loads(response.choices[0].message.content)
-        
-        # 3. Contract 5.3: AI 객체 조립
         needs_review = True if ai_result["label"] == "INCONCLUSIVE" else False
         
         finding["ai"] = {
@@ -64,8 +122,10 @@ def analyze_finding(finding, base_dir):
             "report_paragraph": ai_result["report_paragraph"],
             "error": None
         }
+        
+        cache_dict[cache_key] = finding["ai"]
+        
     except Exception as e:
-        # Contract 5.4: AI 실패 시 규격 
         finding["ai"] = {
             "status": "FAILED",
             "status_reason": None,
@@ -84,14 +144,13 @@ def analyze_finding(finding, base_dir):
     return finding
 
 def main():
-    print("AI 분석 파이프라인 가동...")
+    #보안 필터링 및 로컬 캐싱 추가
+    print("AI 파이프라인 가동...")
     
-    # 1. 실행 ID 및 경로 설정 (임시 테스트용)
     run_id = "run-test-01" 
     base_dir = os.path.join("data", "raw", run_id)
     input_file = os.path.join(base_dir, "findings.json")
     
-    # 2. Envelope JSON 읽기
     try:
         with open(input_file, 'r', encoding='utf-8') as f:
             envelope = json.load(f)
@@ -99,16 +158,18 @@ def main():
         print(f"원시 데이터가 없습니다: {input_file} 경로를 확인하세요.")
         return
 
+    target_set_id = envelope.get("target_set_id", "default_target")
+    cache_path = os.path.join("data", "cache", f"{target_set_id}_ai_cache.json")
+    cache_dict = load_cache(cache_path)
+
     processed_findings = []
     
-    # 3. 각 Finding 처리
     for finding in envelope.get("findings", []):
         finding_id = finding.get('finding_id', 'Unknown')
-        print(f"분석 중: {finding_id}...")
+        print(f"\n분석 중: {finding_id}...")
         
-        # Contract 5.4: scan.status가 FAILED면 AI 요청 안 함
         if finding.get("scan", {}).get("status") == "COMPLETED":
-            updated_finding = analyze_finding(finding, base_dir)
+            updated_finding = analyze_finding(finding, base_dir, cache_dict)
         else:
             updated_finding = finding
             updated_finding["ai"] = {
@@ -127,10 +188,10 @@ def main():
             }
         processed_findings.append(updated_finding)
         
-    # 4. Envelope 결과 덮어쓰기
     envelope["findings"] = processed_findings
     
-    # 5. Processed 경로에 저장
+    save_cache(cache_path, cache_dict)
+    
     output_dir = os.path.join("data", "processed", run_id)
     os.makedirs(output_dir, exist_ok=True)
     output_file = os.path.join(output_dir, "results.json")
@@ -138,7 +199,7 @@ def main():
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(envelope, f, ensure_ascii=False, indent=2)
         
-    print(f"분석 완료! '{output_file}' 파일이 생성되었습니다.")
+    print(f"\n분석 및 캐시 저장 완료! '{output_file}'")
 
 if __name__ == "__main__":
     main()
