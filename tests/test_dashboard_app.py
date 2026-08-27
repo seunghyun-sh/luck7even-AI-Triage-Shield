@@ -62,7 +62,7 @@ def test_dashboard_uses_discovered_actual_results_by_default() -> None:
 
         assert not app.exception
         assert app.radio[0].value == "발견된 결과 사용"
-        assert app.selectbox[0].value == results_path
+        assert app.sidebar.selectbox[0].value == results_path
     finally:
         results_path.unlink()
         results_path.parent.rmdir()

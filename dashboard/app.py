@@ -405,6 +405,9 @@ def _report_frame(
     report.loc[
         report["_merge"].eq("left_only"), "evaluation_exclusion_reason"
     ] = "NO_GROUND_TRUTH"
+    report["ground_truth_label"] = report["ground_truth_label"].astype(object).where(
+        report["ground_truth_label"].notna(), None
+    )
     return report.drop(columns="_merge")
 
 
