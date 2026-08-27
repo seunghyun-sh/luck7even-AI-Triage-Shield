@@ -73,6 +73,15 @@ MVP에서는 스캐너와 OpenAI 처리를 `main.py`가 순서대로 실행한�
 
 MVP에서는 payload 직접 입력, 임의 URL, 동시 실행 수와 AI 모델을 실행 요청으로 받지 않는다.
 
+### 4.3 실행 전 사전점검
+
+대시보드는 실행 버튼을 활성화하기 전에 검증된 선택 manifest를 대상으로 읽기 전용 사전점검을 수행한다. 이 점검은 스캐너를 호출하거나 공격 payload를 전송하지 않는다.
+
+- manifest의 `base_url`에만 `/health`를 붙여 GET 요청하고, 1초 이하 timeout, redirect 금지, 인증정보 미전송으로 HTTP `200`만 준비 상태로 판단한다. 응답 본문과 네트워크 예외 원문은 저장하거나 표시하지 않는다.
+- 선택한 모든 진단 유형이 manifest에 존재하고, 해당 scanner의 `scan` callable 및 `analysis.ai_triage.triage` callable이 있어야 한다.
+- 전역 pipeline lock이 비활성이며 data root에 쓸 수 있어야 한다.
+- 하나라도 차단되면 대시보드는 원인별 안전한 안내를 표시하고 실행 버튼을 비활성화한다. 버튼 활성화에는 사전점검 READY, 하나 이상의 진단 유형 선택, 격리·허가 확인 checkbox가 모두 필요하다.
+
 ## 5. Python 실행 인터페이스
 
 대시보드와 CLI는 같은 blocking orchestration core를 사용한다.

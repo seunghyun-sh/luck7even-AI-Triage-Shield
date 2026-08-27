@@ -79,6 +79,29 @@ def test_execution_tab_lists_only_contract_manifest_and_disables_default_launch(
     assert launch_button.disabled
 
 
+def test_execution_tab_shows_preflight_panel_and_blocks_missing_components() -> None:
+    app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+    app.multiselect[0].set_value(["XSS", "SQLI"]).run(timeout=30)
+
+    assert not app.exception
+    assert any(
+        markdown.value == "#### 실행 준비 상태" for markdown in app.markdown
+    )
+    assert any(
+        "XSS 스캐너를 사용할 수 없습니다." in error.value for error in app.error
+    )
+    assert any(
+        "SQLI 스캐너를 사용할 수 없습니다." in error.value for error in app.error
+    )
+    assert any(
+        "AI triage를 사용할 수 없습니다." in error.value for error in app.error
+    )
+    launch_button = next(
+        button for button in app.button if button.label == "진단 실행 시작"
+    )
+    assert launch_button.disabled
+
+
 def test_execution_tab_displays_authoritative_run_status() -> None:
     store = RunStore(PROCESSED_PATH.parent)
     status = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))

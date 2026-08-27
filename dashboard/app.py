@@ -30,6 +30,7 @@ from dashboard.metrics import (
 from dashboard.report_builder import build_excel_report
 from orchestration.data_loader import ContractLoadError, load_target_manifest
 from orchestration.launcher import RunLaunchError, start_run
+from orchestration.preflight import Readiness, run_preflight
 from orchestration.run_store import RunStore
 
 SAMPLE_PROCESSED = PROJECT_ROOT / "configs" / "triaged-results.example.json"
@@ -591,6 +592,19 @@ def _render_execution_tab() -> None:
     )
     selected_types = st.multiselect("진단 유형", ("XSS", "SQLI"))
     acknowledged = st.checkbox("격리되고 허가된 진단 환경임을 확인했습니다.")
+    st.markdown("#### 실행 준비 상태")
+    st.button("준비 상태 새로고침")
+    preflight = run_preflight(
+        dict(manifests)[selected_path],
+        selected_types,
+        DATA_ROOT,
+    )
+    for check in preflight.checks:
+        line = f"**{check.name}** · {check.message} (`{check.code}`)"
+        if check.readiness is Readiness.READY:
+            st.success(line)
+        else:
+            st.error(line)
 
     scan_run_id = st.session_state.get("scan_run_id")
     active_run_id = _active_run_id()
@@ -606,7 +620,7 @@ def _render_execution_tab() -> None:
             scan_run_id = None
     if st.button(
         "진단 실행 시작",
-        disabled=not (selected_types and acknowledged) or active,
+        disabled=not (preflight.ready and selected_types and acknowledged) or active,
     ):
         try:
             st.session_state["scan_run_id"] = start_run(
