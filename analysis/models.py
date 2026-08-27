@@ -6,13 +6,16 @@ from datetime import datetime
 from enum import Enum
 from pathlib import PurePath, PureWindowsPath
 from typing import Literal, Self
+from urllib.parse import unquote, urlsplit
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
     StrictBool,
+    StrictFloat,
     StrictInt,
+    StrictStr,
     field_validator,
     model_validator,
 )
@@ -73,6 +76,99 @@ class ErrorDetail(ContractModel):
     code: str = Field(min_length=1)
     message: str = Field(min_length=1)
     retryable: StrictBool
+
+
+class RequestPolicy(ContractModel):
+    timeout_seconds: StrictInt = Field(gt=0)
+    follow_redirects: StrictBool
+
+
+class TargetInput(ContractModel):
+    location: Literal["query", "form", "json"]
+    parameters: dict[StrictStr, StrictStr | StrictInt | StrictFloat | StrictBool | None]
+    attack_parameter: StrictStr = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_attack_parameter(self) -> Self:
+        if self.attack_parameter not in self.parameters:
+            raise ValueError("attack_parameter must exist in parameters")
+        return self
+
+
+class TargetCase(ContractModel):
+    case_id: StrictStr = Field(min_length=1)
+    vuln_type: VulnType
+    path: StrictStr = Field(min_length=1)
+    method: Literal["GET", "POST"]
+    input: TargetInput
+    requires_pre_auth: StrictBool
+    auth_profile: StrictStr | None
+    payload_profile: StrictStr = Field(min_length=1)
+    manual_verification_profile: StrictStr = Field(min_length=1)
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        decoded = unquote(value)
+        path = PurePath(decoded)
+        windows_path = PureWindowsPath(decoded)
+        if (
+            not value.startswith("/")
+            or parsed.scheme
+            or parsed.netloc
+            or parsed.query
+            or parsed.fragment
+            or "\\" in value
+            or ".." in path.parts
+            or ".." in windows_path.parts
+        ):
+            raise ValueError("path must be a safe relative path rooted at /")
+        return value
+
+    @model_validator(mode="after")
+    def validate_auth_profile(self) -> Self:
+        if self.requires_pre_auth and not self.auth_profile:
+            raise ValueError("pre-auth target requires an auth_profile")
+        if not self.requires_pre_auth and self.auth_profile is not None:
+            raise ValueError("target without pre-auth must not include an auth_profile")
+        return self
+
+
+class TargetManifest(ContractModel):
+    schema_version: Literal["1.0"]
+    target_set_id: StrictStr = Field(min_length=1)
+    base_url: StrictStr = Field(min_length=1)
+    request_policy: RequestPolicy
+    targets: list[TargetCase] = Field(min_length=1)
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        try:
+            port = parsed.port
+        except ValueError as error:
+            raise ValueError("base_url must have a valid port") from error
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or parsed.path not in {"", "/"}
+            or port is not None and not 0 <= port <= 65535
+        ):
+            raise ValueError("base_url must be an http or https origin without userinfo")
+        return value
+
+    @model_validator(mode="after")
+    def validate_case_ids(self) -> Self:
+        case_ids = [target.case_id for target in self.targets]
+        if len(case_ids) != len(set(case_ids)):
+            raise ValueError("case_id values must be unique within a target manifest")
+        return self
 
 
 class ScanRequest(ContractModel):
@@ -365,6 +461,100 @@ class ProcessedRun(ContractModel):
             if not has_failure or not has_usable_completed_scan:
                 raise ValueError(
                     "partial run requires failures and a usable completed scan"
+                )
+        elif has_usable_completed_scan:
+            raise ValueError("failed run must not contain a usable completed scan")
+        return self
+
+
+class RawFinding(ContractModel):
+    case_id: StrictStr = Field(min_length=1)
+    finding_id: StrictStr = Field(min_length=1)
+    scanned_at: datetime
+    vuln_type: VulnType
+    scan: ScanResult
+
+    @field_validator("scanned_at", mode="before")
+    @classmethod
+    def reject_numeric_scanned_at(cls, value: object) -> object:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            raise PydanticCustomError(
+                "datetime_type", "scanned_at must be an ISO 8601 timestamp string"
+            )
+        return value
+
+    @field_validator("scanned_at")
+    @classmethod
+    def validate_scanned_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("scanned_at must include a timezone offset")
+        return value
+
+    @model_validator(mode="after")
+    def validate_sqli_baseline(self) -> Self:
+        if (
+            self.scan.status is ScanStatus.COMPLETED
+            and self.vuln_type is VulnType.SQLI
+            and self.scan.response.baseline_elapsed_ms is None
+        ):
+            raise ValueError("completed SQLI scan requires baseline_elapsed_ms")
+        return self
+
+
+class RawRun(ContractModel):
+    schema_version: Literal["1.0"]
+    scan_run_id: StrictStr = Field(min_length=1)
+    target_set_id: StrictStr = Field(min_length=1)
+    started_at: datetime
+    completed_at: datetime | None
+    status: RunStatus
+    findings: list[RawFinding]
+
+    @field_validator("started_at", "completed_at", mode="before")
+    @classmethod
+    def reject_numeric_timestamps(cls, value: object) -> object:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            raise PydanticCustomError(
+                "datetime_type", "timestamps must be ISO 8601 timestamp strings"
+            )
+        return value
+
+    @field_validator("started_at", "completed_at")
+    @classmethod
+    def validate_timestamp(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("timestamps must include a timezone offset")
+        return value
+
+    @model_validator(mode="after")
+    def validate_run(self) -> Self:
+        if self.completed_at is not None and self.completed_at < self.started_at:
+            raise ValueError("completed_at must not precede started_at")
+        finding_ids = [finding.finding_id for finding in self.findings]
+        if len(finding_ids) != len(set(finding_ids)):
+            raise ValueError("finding_id values must be unique within a scan run")
+        case_ids = [finding.case_id for finding in self.findings]
+        if len(case_ids) != len(set(case_ids)):
+            raise ValueError("case_id values must be unique within a scan run")
+
+        has_failed_scan = any(
+            finding.scan.status is ScanStatus.FAILED for finding in self.findings
+        )
+        has_usable_completed_scan = any(
+            finding.scan.status is ScanStatus.COMPLETED for finding in self.findings
+        )
+        if (
+            self.status in {RunStatus.COMPLETED, RunStatus.PARTIAL}
+            and self.completed_at is None
+        ):
+            raise ValueError("completed and partial runs require completed_at")
+        if self.status is RunStatus.COMPLETED:
+            if has_failed_scan:
+                raise ValueError("completed run must not contain scan failures")
+        elif self.status is RunStatus.PARTIAL:
+            if not has_failed_scan or not has_usable_completed_scan:
+                raise ValueError(
+                    "partial run requires scan failures and a usable completed scan"
                 )
         elif has_usable_completed_scan:
             raise ValueError("failed run must not contain a usable completed scan")
