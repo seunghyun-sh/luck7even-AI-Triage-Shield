@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}{{ product['name'] }} · Lumi Market{% endblock %}
+{% block content %}
+  <section class="product-detail container">
+    <div class="detail-visual accent-{{ product['accent'] }}"><span>{{ product['name'][0] }}</span><small>LUMI ORIGINAL</small></div>
+    <div class="detail-copy">
+      <p class="breadcrumb"><a href="{{ url_for('storefront.products') }}">SHOP</a> / {{ product['category'] }}</p>
+      {% if product['badge'] %}<span class="product-badge inline">{{ product['badge'] }}</span>{% endif %}
+      <h1>{{ product['name'] }}</h1>
+      <div class="detail-rating">★ {{ product['rating'] }} <a href="{{ url_for('community.reviews') }}">후기 {{ product['review_count'] }}개</a></div>
+      <div class="detail-price"><strong>{{ "{:,}".format(product['price']) }}원</strong>{% if product['original_price'] %}<del>{{ "{:,}".format(product['original_price']) }}원</del>{% endif %}</div>
+      <p class="description">{{ product['description'] }}</p>
+      <dl class="detail-facts"><div><dt>배송</dt><dd>무료배송 · 평일 오후 2시 이전 당일 출고</dd></div><div><dt>재고</dt><dd>{{ product['stock'] }}개 남음</dd></div><div><dt>혜택</dt><dd>구매금액의 1% 포인트 적립</dd></div></dl>
+      <form method="post" action="{{ url_for('storefront.add_to_cart', product_id=product['id']) }}"><button class="button primary wide" type="submit">장바구니 담기</button></form>
+    </div>
+  </section>
+  <section class="detail-section"><div class="container narrow-copy"><p class="eyebrow dark">ABOUT THE PRODUCT</p><h2>매일 손이 가는 물건에는<br>분명한 이유가 있습니다.</h2><p>{{ product['description'] }} 과도한 장식보다 오래 사용할 수 있는 균형을 우선했습니다. Lumi가 직접 고른 제품으로 일상의 작은 변화를 경험해 보세요.</p></div></section>
+{% endblock %}
+

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}전체 상품 · Lumi Market{% endblock %}
+{% block content %}
+  <section class="page-hero"><p class="eyebrow dark">SHOP</p><h1>{% if selected_category %}{{ selected_category }}{% else %}전체 상품{% endif %}</h1><p>일상을 더 편안하고 아름답게 만드는 물건을 만나보세요.</p></section>
+  <section class="section container">
+    <nav class="filter-tabs" aria-label="상품 카테고리">
+      <a class="{{ 'active' if not selected_category }}" href="{{ url_for('storefront.products') }}">전체</a>
+      {% for category in categories %}<a class="{{ 'active' if selected_category == category }}" href="{{ url_for('storefront.products', category=category) }}">{{ category }}</a>{% endfor %}
+    </nav>
+    <div class="list-meta"><span>{{ products|length }}개의 상품</span><span>추천순</span></div>
+    <div class="product-grid">
+      {% for product in products %}{% include "_product_card.html" %}{% else %}<div class="empty-state"><h2>상품이 없습니다</h2><p>다른 카테고리를 선택해 주세요.</p></div>{% endfor %}
+    </div>
+  </section>
+{% endblock %}
+

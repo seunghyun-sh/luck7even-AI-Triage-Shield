@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}마이페이지 · Lumi Market{% endblock %}
+{% block content %}
+  <section class="page-hero compact"><p class="eyebrow dark">MY LUMI</p><h1>{{ user['display_name'] }}님, 반갑습니다.</h1><p>오늘도 취향 있는 하루를 보내세요.</p></section>
+  <section class="section container profile-grid"><div class="profile-card main"><div class="avatar">{{ user['display_name'][0] }}</div><div><span class="role-chip">{{ user['role'] }}</span><h2>{{ user['display_name'] }}</h2><p>{{ user['email'] }}</p></div></div><div class="profile-card"><strong>0</strong><span>주문내역</span></div><div class="profile-card"><strong>0</strong><span>쿠폰</span></div><div class="profile-card"><strong>1,000</strong><span>포인트</span></div></section>
+  <section class="container profile-actions"><a href="{{ url_for('storefront.cart') }}">장바구니 보기 <span>→</span></a><a href="{{ url_for('community.reviews') }}">구매후기 관리 <span>→</span></a><a href="{{ url_for('community.support') }}">1:1 문의 <span>→</span></a><form method="post" action="{{ url_for('auth.logout') }}"><button class="link-button" type="submit">로그아웃</button></form></section>
+{% endblock %}
+

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}구매후기 · Lumi Market{% endblock %}
+{% block content %}
+  <section class="page-hero"><p class="eyebrow dark">REVIEW</p><h1>고객의 이야기</h1><p>직접 사용한 고객들이 전하는 솔직한 경험을 확인해 보세요.</p></section>
+  <section class="section container review-layout">
+    <div class="review-list">
+      {% for review in reviews %}<article class="review-card"><div class="review-top"><div><div class="stars">{{ "★" * review['rating'] }}{{ "☆" * (5-review['rating']) }}</div><h2>{{ review['title'] }}</h2></div><span>{{ review['created_at'][:10] }}</span></div>
+        <!-- Intentionally unsafe output for the authorized stored-XSS lab. -->
+        <div class="review-content">{{ review['content'] | safe }}</div><strong class="review-author">{{ review['author'] }} 고객님</strong></article>{% endfor %}
+    </div>
+    <aside class="review-form-card"><span class="eyebrow dark">WRITE A REVIEW</span><h2>후기 작성</h2><form method="post" class="stacked-form"><label for="author">작성자</label><input id="author" name="author" required><label for="rating">평점</label><select id="rating" name="rating"><option value="5">★★★★★</option><option value="4">★★★★☆</option><option value="3">★★★☆☆</option><option value="2">★★☆☆☆</option><option value="1">★☆☆☆☆</option></select><label for="title">제목</label><input id="title" name="title" required><label for="content">후기</label><textarea id="content" name="content" rows="6" required></textarea><button class="button primary wide" type="submit">후기 등록</button></form></aside>
+  </section>
+{% endblock %}
+
