@@ -5,8 +5,25 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import quote
 
 import requests
+
+
+def safe_header_value(value: str) -> str:
+    """Make a value safe to send as a raw HTTP header.
+
+    HTTP headers must be Latin-1 encodable; AI-generated payloads can contain
+    Korean text, emoji, etc. that raise UnicodeEncodeError deep inside
+    `http.client` and crash the whole scan. Percent-encode anything that
+    isn't Latin-1 safe instead of sending it as-is -- a real header could
+    never carry that text unescaped either.
+    """
+    try:
+        value.encode("latin-1")
+        return value
+    except UnicodeEncodeError:
+        return quote(value, safe="")
 
 
 class LabSession:

@@ -58,12 +58,14 @@ def run_scan(session: base.LabSession, target_urls: list[str], payloads: list[st
             attack_params = {name: payload for name in INJECTABLE_PARAMS}
             attack_params.update({"action": "add", "form": "submit"})
             # [헤더 인젝션] User-Agent, Referer, Custom Header 취약점을 노리기 위한 헤더 조작
-            attack_headers = {name: payload for name in INJECTABLE_HEADERS}
+            # 헤더는 latin-1만 허용되므로, 한글/이모지 등 AI 페이로드는 안전하게 인코딩
+            header_value = base.safe_header_value(payload)
+            attack_headers = {name: header_value for name in INJECTABLE_HEADERS}
 
             try:
                 res_get = session.get(url, params=attack_params, headers=attack_headers)
                 res_post = session.post(url, data=attack_params, headers=attack_headers)
-            except requests.RequestException:
+            except (requests.RequestException, UnicodeError):
                 skipped += 1
                 continue
 
