@@ -97,7 +97,6 @@ flowchart LR
 ├── lab_app/               # 격리된 Flask 실습 웹앱
 ├── scanners/              # XSS·SQLi 스캐너와 공통 로직
 ├── tests/                 # 자동화 테스트
-├── .env.example
 ├── main.py                # 로컬 통합 실행 진입점
 └── requirements.txt
 ```
@@ -117,11 +116,7 @@ pip install -r requirements.txt
 
 ### 2. 환경 변수 설정
 
-```bash
-cp .env.example .env
-```
-
-`.env`의 `OPENAI_API_KEY`와 `OPENAI_MODEL`을 설정합니다. API 키, 비밀번호, 세션 키, AWS 계정 정보, 고정 IP, 개인정보가 포함된 원본 응답은 커밋하지 않습니다.
+로컬 `.env` 파일에 `OPENAI_API_KEY`와 `OPENAI_MODEL`을 설정합니다. 현재 저장소에는 `.env.example`이 포함되어 있지 않습니다. API 키, 비밀번호, 세션 키, AWS 계정 정보, 고정 IP, 개인정보가 포함된 원본 응답은 커밋하지 않습니다.
 
 ### 3. 실습 웹앱 실행
 
@@ -129,17 +124,22 @@ cp .env.example .env
 flask --app lab_app.app run --debug
 ```
 
-### 4. 통합 진단 실행
+### 4. 등록 대상 통합 진단 실행
 
 ```bash
-python main.py --targets configs/targets.example.json
+python main.py run --target-set-id local-lab-v1 --types XSS SQLI
 ```
+
+허가 대상은 `configs/target-registry.json`에 등록하며, 실행 시 manifest ID와
+`base_url` allowlist를 다시 검증한 뒤 스캐너·AI 처리·결과 저장 파이프라인을 실행합니다.
 
 ### 5. 대시보드 실행
 
 ```bash
 streamlit run dashboard/app.py
 ```
+
+기본 실행 시 계약 v1 샘플 결과를 자동으로 불러옵니다. 사이드바에서 processed JSON과 SQLi ground-truth JSON을 업로드할 수 있으며, 결과 검토·필터·차트·조건부 평가와 Excel 초안 다운로드를 제공합니다. 목표 파이프라인은 [`docs/project-flow.md`](docs/project-flow.md), 팀 간 데이터 규격은 [`docs/data-contracts-v1.md`](docs/data-contracts-v1.md), 스캐너 실행·상태 연동은 [`docs/execution-contract-v1.md`](docs/execution-contract-v1.md), 기존 스캐너의 최신 인터페이스 이전 방법은 [`docs/scanner-integration-migration.md`](docs/scanner-integration-migration.md)를 참고하세요.
 
 ## 협업 규칙
 
@@ -151,4 +151,4 @@ streamlit run dashboard/app.py
 
 ## 현재 상태
 
-현재 저장소는 초기 골격 단계입니다. 모듈별 인터페이스와 실행 진입점이 준비되어 있으며, 진단·AI 분석·대시보드·보고서 기능은 각 담당 브랜치에서 구현합니다.
+계약 v1 Pydantic 모델과 샘플 기반 Streamlit 결과 검토·통계·조건부 평가·Excel 초안 기능이 구현되어 있습니다. XSS·SQLi 스캐너, OpenAI 분석과 `main.py` 통합 파이프라인은 아직 골격 단계이며 각 담당 브랜치에서 개발합니다.
