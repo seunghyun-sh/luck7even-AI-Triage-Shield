@@ -392,6 +392,16 @@ data/processed/<scan_run_id>/results.json
 
 - AI 후보가 아닌 Finding도 유지한다.
 - AI 미요청·실패·판정 불가를 구분한다.
+- 신규 writer는 `ProcessedRun.schema_version == "1.1"`과
+  `EVIDENCE_GROUNDED_REPORTING` 역할을 사용한다. Reader는 기존 `1.0`도
+  검토할 수 있지만 출처 없는 기존 초안으로 명시한다.
+- `triage(raw_run) -> ProcessedRun`은 파일을 직접 게시하지 않으며 raw
+  Finding과 scan facts를 1:1 보존한다.
+- Responses API File Search의 completed 검색 결과와 message citation의
+  교집합이 private KB manifest와 일치할 때만 공식 reference를 생성한다.
+- AI 보조 판정은 항상 `INCONCLUSIVE`, `confidence=null`,
+  `needs_human_review=true`다. `INSUFFICIENT`는 claim·reference·권고·보고서
+  문장을 포함하지 않는다.
 - processed 검증과 게시 완료 후에만 `status.processed_result_path`를 기록한다.
 
 ### 12.3 원자적 게시

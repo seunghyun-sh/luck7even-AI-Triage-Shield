@@ -128,6 +128,16 @@ pip install -r requirements.txt
 
 로컬 `.env` 파일에 `OPENAI_API_KEY`와 `OPENAI_MODEL`을 설정합니다. 현재 저장소에는 `.env.example`이 포함되어 있지 않습니다. API 키, 비밀번호, 세션 키, AWS 계정 정보, 고정 IP, 개인정보가 포함된 원본 응답은 커밋하지 않습니다.
 
+AI triage는 Responses API File Search와 검증된 공식 문서 manifest가 모두 준비되어야 실행됩니다. `configs/knowledge-base.example.json`의 형식을 참고해 실제 Vector Store·File ID가 포함된 `configs/knowledge-base.local.json`을 비공개로 작성합니다. 이 파일은 Git에서 제외되며 OWASP·KISA HTTPS 자료만 허용합니다. 대시보드 사전점검은 API key, model, manifest가 하나라도 없거나 잘못되면 실행을 차단합니다.
+
+```text
+RawRun 1.0
+  → analysis.ai_triage.triage(raw_run)
+  → ProcessedRun 1.1
+```
+
+AI는 최종 취약·안전 판정을 내리지 않고 항상 `INCONCLUSIVE` 보조 의견과 사람 검토 필요 상태를 생성합니다. 실제 검색 결과·citation·manifest가 일치할 때만 `GROUNDED` 보고서 초안을 만들며, 공식 근거가 부족하면 `INSUFFICIENT`로 기록하고 권고·보고서 문장을 생성하지 않습니다.
+
 ### 3. 실습 웹앱 실행
 
 실제로 XSS 취약점이 있는 실습 앱은 이 브랜치가 아니라 별도 브랜치에 있습니다(이 브랜치의 `lab_app/`은 `/health`만 있는 자리표시자 스켈레톤입니다).

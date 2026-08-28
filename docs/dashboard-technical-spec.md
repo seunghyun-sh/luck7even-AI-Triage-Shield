@@ -41,7 +41,7 @@ Streamlit 코드에 데이터 검증, 지표 산식과 Excel 생성 로직을 �
 ### 4.1 입력 순서
 
 1. JSON 문법 확인
-2. `schema_version == "1.0"` 확인
+2. artifact별 버전 확인: target·raw·ground truth는 `1.0`, processed reader는 `1.0`·`1.1`만 허용
 3. envelope 필드와 run status 확인
 4. Finding 필수 필드와 자료형 확인
 5. enum과 상태별 null 불변 조건 확인
@@ -51,6 +51,10 @@ Streamlit 코드에 데이터 검증, 지표 산식과 Excel 생성 로직을 �
 9. 검증된 모델을 표 또는 view model로 변환
 
 알 수 없는 버전, enum과 누락 필드를 임의 변환하지 않는다.
+
+Processed `1.1`은 `EVIDENCE_GROUNDED_REPORTING` 역할, grounding 상태,
+claim·reference·provenance 불변 조건을 추가한다. `1.0`은 기존 결과 검토만
+허용하고 화면에 `출처 없는 기존 AI 초안` 경고를 표시한다.
 
 ### 4.2 run 상태
 
