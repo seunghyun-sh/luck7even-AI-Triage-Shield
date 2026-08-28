@@ -344,12 +344,12 @@ def test_dashboard_renders_conditional_sqli_evaluation() -> None:
         }
     }
     assert evaluation_metrics == {
-        "Accuracy": "100.0%",
-        "Precision": "100.0%",
-        "Recall": "100.0%",
+        "Accuracy": "N/A",
+        "Precision": "N/A",
+        "Recall": "N/A",
         "N_labeled": "4",
-        "N_scored": "1",
-        "Scored coverage": "25.0%",
+        "N_scored": "0",
+        "Scored coverage": "0.0%",
     }
 
 

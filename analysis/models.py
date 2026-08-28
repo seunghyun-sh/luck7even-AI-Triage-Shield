@@ -61,6 +61,23 @@ class AiLabel(str, Enum):
     INCONCLUSIVE = "INCONCLUSIVE"
 
 
+class AiRole(str, Enum):
+    EVIDENCE_GROUNDED_REPORTING = "EVIDENCE_GROUNDED_REPORTING"
+
+
+class GroundingStatus(str, Enum):
+    GROUNDED = "GROUNDED"
+    INSUFFICIENT = "INSUFFICIENT"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
+class AiClaimType(str, Enum):
+    OBSERVATION = "OBSERVATION"
+    IMPACT = "IMPACT"
+    RECOMMENDATION = "RECOMMENDATION"
+    MANUAL_CHECK = "MANUAL_CHECK"
+
+
 class AiStatusReason(str, Enum):
     RULE_NOT_SUSPECTED = "RULE_NOT_SUSPECTED"
     SCAN_FAILED = "SCAN_FAILED"
@@ -158,9 +175,12 @@ class TargetManifest(ContractModel):
             or parsed.query
             or parsed.fragment
             or parsed.path not in {"", "/"}
-            or port is not None and not 0 <= port <= 65535
+            or port is not None
+            and not 0 <= port <= 65535
         ):
-            raise ValueError("base_url must be an http or https origin without userinfo")
+            raise ValueError(
+                "base_url must be an http or https origin without userinfo"
+            )
         return value
 
     @model_validator(mode="after")
@@ -267,6 +287,82 @@ class ScanResult(ContractModel):
         return self
 
 
+class AiClaim(ContractModel):
+    claim_id: str = Field(min_length=1)
+    claim_type: AiClaimType
+    text: str = Field(min_length=1)
+    evidence_ids: list[str] = Field(default_factory=list)
+    reference_ids: list[str] = Field(default_factory=list)
+
+
+class AiReference(ContractModel):
+    reference_id: str = Field(min_length=1)
+    source_id: str = Field(min_length=1)
+    publisher: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    version: str = Field(min_length=1)
+    section: str = Field(min_length=1)
+    canonical_url: str = Field(min_length=1)
+    file_id: str = Field(min_length=1)
+    document_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("canonical_url")
+    @classmethod
+    def validate_canonical_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        if (
+            parsed.scheme != "https"
+            or hostname is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or not (
+                hostname in {"owasp.org", "kisa.or.kr"}
+                or hostname.endswith((".owasp.org", ".kisa.or.kr"))
+            )
+        ):
+            raise ValueError(
+                "canonical_url must be an allowlisted OWASP or KISA https URL without credentials, query, or fragment"
+            )
+        return value
+
+
+class AiProvenance(ContractModel):
+    model: str = Field(min_length=1)
+    prompt_version: str = Field(min_length=1)
+    knowledge_base_version: str = Field(min_length=1)
+    output_schema_version: Literal["1.1"]
+    retrieval_policy_version: str = Field(min_length=1)
+    vector_store_ids: list[str] = Field(default_factory=list)
+    retrieved_file_ids: list[str] = Field(default_factory=list)
+    generated_at: datetime
+
+    @field_validator("vector_store_ids", "retrieved_file_ids")
+    @classmethod
+    def validate_unique_ids(cls, value: list[str]) -> list[str]:
+        if any(not identifier for identifier in value) or len(value) != len(set(value)):
+            raise ValueError("provenance identifiers must be nonblank and unique")
+        return value
+
+    @field_validator("generated_at", mode="before")
+    @classmethod
+    def reject_numeric_generated_at(cls, value: object) -> object:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            raise PydanticCustomError(
+                "datetime_type", "generated_at must be an ISO 8601 timestamp string"
+            )
+        return value
+
+    @field_validator("generated_at")
+    @classmethod
+    def validate_generated_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("generated_at must include a timezone offset")
+        return value
+
+
 class AiResult(ContractModel):
     status: AiStatus
     status_reason: AiStatusReason | None
@@ -280,6 +376,11 @@ class AiResult(ContractModel):
     manual_check: str | None
     report_paragraph: str | None
     error: ErrorDetail | None
+    role: AiRole | None = None
+    grounding_status: GroundingStatus | None = None
+    claims: list[AiClaim] = Field(default_factory=list)
+    references: list[AiReference] = Field(default_factory=list)
+    provenance: AiProvenance | None = None
 
     @field_validator("confidence", mode="before")
     @classmethod
@@ -300,6 +401,15 @@ class AiResult(ContractModel):
         )
         if self.confidence is not None and not 0.0 <= self.confidence <= 1.0:
             raise ValueError("confidence must be between 0.0 and 1.0")
+        claim_ids = [claim.claim_id for claim in self.claims]
+        if len(claim_ids) != len(set(claim_ids)):
+            raise ValueError("claim_id values must be unique within an AI result")
+        reference_ids = [reference.reference_id for reference in self.references]
+        if len(reference_ids) != len(set(reference_ids)):
+            raise ValueError("reference_id values must be unique within an AI result")
+
+        if self.role is AiRole.EVIDENCE_GROUNDED_REPORTING:
+            return self.validate_evidence_grounded_fields(generated_fields)
 
         if self.status is AiStatus.COMPLETED:
             if self.status_reason is not None or self.error is not None:
@@ -343,6 +453,173 @@ class AiResult(ContractModel):
             if self.error is None:
                 raise ValueError("failed AI result requires an error")
         return self
+
+    def validate_evidence_grounded_fields(
+        self, generated_fields: tuple[str | None, ...]
+    ) -> Self:
+        reference_ids = [reference.reference_id for reference in self.references]
+
+        if self.status is AiStatus.COMPLETED:
+            if self.grounding_status is GroundingStatus.GROUNDED:
+                if (
+                    self.label is not AiLabel.INCONCLUSIVE
+                    or self.confidence is not None
+                    or not self.needs_human_review
+                    or self.status_reason is not None
+                    or self.error is not None
+                ):
+                    raise ValueError(
+                        "grounded evidence AI result requires inconclusive label, null confidence, human review, and no status_reason or error"
+                    )
+                if any(
+                    value is None or not value.strip() for value in generated_fields
+                ):
+                    raise ValueError(
+                        "grounded evidence AI result requires all generated text fields"
+                    )
+                if not self.claims or not self.references:
+                    raise ValueError(
+                        "grounded evidence AI result requires claims and references"
+                    )
+                claim_types = {claim.claim_type for claim in self.claims}
+                required_types = set(AiClaimType)
+                if not required_types.issubset(claim_types):
+                    raise ValueError(
+                        "grounded evidence AI result requires every claim type"
+                    )
+                if any(
+                    not evidence_id.startswith("E")
+                    or not evidence_id[1:].isdigit()
+                    or int(evidence_id[1:]) <= 0
+                    for claim in self.claims
+                    for evidence_id in claim.evidence_ids
+                ):
+                    raise ValueError(
+                        "claim evidence_ids must be E followed by a positive integer"
+                    )
+                if any(
+                    len(claim.evidence_ids) != len(set(claim.evidence_ids))
+                    or len(claim.reference_ids) != len(set(claim.reference_ids))
+                    for claim in self.claims
+                ):
+                    raise ValueError(
+                        "claim evidence_ids and reference_ids must be unique"
+                    )
+                if any(
+                    not claim.evidence_ids
+                    for claim in self.claims
+                    if claim.claim_type is AiClaimType.OBSERVATION
+                ):
+                    raise ValueError("observation claims require local evidence IDs")
+                if any(
+                    not claim.reference_ids
+                    for claim in self.claims
+                    if claim.claim_type is not AiClaimType.OBSERVATION
+                ):
+                    raise ValueError(
+                        "impact, recommendation, and manual-check claims require references"
+                    )
+                reference_id_set = set(reference_ids)
+                if any(
+                    reference_id not in reference_id_set
+                    for claim in self.claims
+                    for reference_id in claim.reference_ids
+                ):
+                    raise ValueError("claim reference_ids must exist in references")
+                if self.provenance is None:
+                    raise ValueError("evidence AI result requires provenance")
+                if (
+                    not self.provenance.vector_store_ids
+                    or not self.provenance.retrieved_file_ids
+                    or any(
+                        reference.file_id not in set(self.provenance.retrieved_file_ids)
+                        for reference in self.references
+                    )
+                ):
+                    raise ValueError(
+                        "grounded references must come from retrieved provenance files"
+                    )
+            elif self.grounding_status is GroundingStatus.INSUFFICIENT:
+                if (
+                    self.label is not AiLabel.INCONCLUSIVE
+                    or self.confidence is not None
+                    or not self.needs_human_review
+                    or self.status_reason is not AiStatusReason.POLICY_EXCLUDED
+                    or self.error is not None
+                    or self.assessment_summary is None
+                    or not self.assessment_summary.strip()
+                    or any(
+                        value is not None
+                        for value in (
+                            self.impact,
+                            self.recommendation,
+                            self.manual_check,
+                            self.report_paragraph,
+                        )
+                    )
+                    or self.references
+                    or self.provenance is None
+                ):
+                    raise ValueError(
+                        "insufficient evidence AI result violates its contract"
+                    )
+            else:
+                raise ValueError(
+                    "completed evidence AI result requires GROUNDED or INSUFFICIENT grounding_status"
+                )
+        elif self.status is AiStatus.NOT_REQUESTED:
+            if self.grounding_status is not GroundingStatus.NOT_APPLICABLE:
+                raise ValueError(
+                    "not-requested evidence AI result requires NOT_APPLICABLE grounding_status"
+                )
+            if self.claims or self.references or self.provenance is not None:
+                raise ValueError(
+                    "not-requested evidence AI result must not include claims, references, or provenance"
+                )
+            self.validate_legacy_status_fields(generated_fields)
+        else:
+            if self.grounding_status is not GroundingStatus.NOT_APPLICABLE:
+                raise ValueError(
+                    "failed evidence AI result requires NOT_APPLICABLE grounding_status"
+                )
+            if self.claims or self.references:
+                raise ValueError(
+                    "failed evidence AI result must not include claims or references"
+                )
+            self.validate_legacy_status_fields(generated_fields)
+        return self
+
+    def validate_legacy_status_fields(
+        self, generated_fields: tuple[str | None, ...]
+    ) -> None:
+        if self.status is AiStatus.NOT_REQUESTED:
+            if self.status_reason is None:
+                raise ValueError("not-requested AI result requires status_reason")
+            if (
+                self.label is not None
+                or self.confidence is not None
+                or any(value is not None for value in generated_fields)
+            ):
+                raise ValueError(
+                    "not-requested AI result must not include a label, confidence, or generated text"
+                )
+            if self.error is not None:
+                raise ValueError("not-requested AI result must not include an error")
+        else:
+            if self.status_reason is not None:
+                raise ValueError("failed AI result must not include status_reason")
+            if (
+                self.label is not None
+                or self.confidence is not None
+                or any(value is not None for value in generated_fields)
+            ):
+                raise ValueError(
+                    "failed AI result must not include a label, confidence, or generated text"
+                )
+            if not self.needs_human_review:
+                raise ValueError("failed AI result requires human review")
+            if self.error is None:
+                raise ValueError("failed AI result requires an error")
 
 
 class ProcessedFinding(ContractModel):
@@ -406,7 +683,7 @@ class ProcessedFinding(ContractModel):
 
 
 class ProcessedRun(ContractModel):
-    schema_version: Literal["1.0"]
+    schema_version: Literal["1.0", "1.1"]
     scan_run_id: str = Field(min_length=1)
     target_set_id: str = Field(min_length=1)
     started_at: datetime
@@ -440,6 +717,15 @@ class ProcessedRun(ContractModel):
         case_ids = [finding.case_id for finding in self.findings]
         if len(case_ids) != len(set(case_ids)):
             raise ValueError("case_id values must be unique within a scan run")
+        if self.schema_version == "1.0" and any(
+            finding.ai.role is not None for finding in self.findings
+        ):
+            raise ValueError("1.0 findings must not include an AI role")
+        if self.schema_version == "1.1" and any(
+            finding.ai.role is not AiRole.EVIDENCE_GROUNDED_REPORTING
+            for finding in self.findings
+        ):
+            raise ValueError("1.1 findings require EVIDENCE_GROUNDED_REPORTING AI role")
 
         has_failure = any(
             finding.scan.status is ScanStatus.FAILED
@@ -617,16 +903,3 @@ class GroundTruthSet(ContractModel):
                 "ground-truth case_id values must be unique within a target_set_id"
             )
         return self
-
-# RAG 기반 AI 분석용 스키마
-from typing import Literal, List
-from pydantic import Field
-
-class AIClaim(BaseModel):
-    claim_type: Literal["OBSERVATION", "IMPACT", "RECOMMENDATION", "MANUAL_CHECK"]
-    text: str
-    evidence_keys: List[str] = Field(default_factory=list)
-    retrieved_result_ids: List[str] = Field(default_factory=list)
-
-class AIAnalysisResult(BaseModel):
-    claims: List[AIClaim]

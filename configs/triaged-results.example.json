@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "scan_run_id": "run-20260827-01",
   "target_set_id": "local-lab-v1",
   "started_at": "2026-08-27T09:30:00+09:00",
@@ -7,193 +7,39 @@
   "status": "PARTIAL",
   "findings": [
     {
-      "case_id": "xss-reflected-a",
-      "finding_id": "XSS-001",
-      "scanned_at": "2026-08-27T09:30:10+09:00",
-      "vuln_type": "XSS",
-      "scan": {
-        "status": "COMPLETED",
-        "request": {"url": "http://127.0.0.1:5000/case/xss-a", "method": "GET", "input_location": "query", "parameter": "name", "payload": "<script>alert(1)</script>"},
-        "response": {"http_status": 200, "elapsed_ms": 182, "baseline_elapsed_ms": null, "evidence_summary": "입력값이 인코딩 없이 응답에 반사되었습니다.", "html_path": "responses/XSS-001.html"},
-        "rule": {"label": "SUSPECTED", "reason": "페이로드가 실행 가능한 HTML 영역에 반사되었습니다."},
-        "error": null
-      },
-      "ai": {
-        "status": "COMPLETED",
-        "status_reason": null,
-        "label": "VULNERABLE",
-        "confidence": 0.98,
-        "needs_human_review": false,
-        "assessment_summary": "스크립트가 실행 가능한 영역에 인코딩 없이 포함되었습니다.",
-        "source_evidence": "응답 HTML에서 원본 script 태그가 확인되었습니다.",
-        "impact": "사용자 브라우저에서 임의 스크립트가 실행될 수 있습니다.",
-        "recommendation": "출력 컨텍스트에 맞는 인코딩과 CSP를 적용합니다.",
-        "manual_check": "격리된 브라우저에서 실제 실행 여부를 확인합니다.",
-        "report_paragraph": "해당 입력 지점에서 반사형 XSS 취약 가능성이 확인되었습니다.",
-        "error": null
-      }
+      "case_id": "xss-reflected-a", "finding_id": "XSS-001", "scanned_at": "2026-08-27T09:30:10+09:00", "vuln_type": "XSS",
+      "scan": {"status": "COMPLETED", "request": {"url": "http://127.0.0.1:5000/case/xss-a", "method": "GET", "input_location": "query", "parameter": "name", "payload": "<script>alert(1)</script>"}, "response": {"http_status": 200, "elapsed_ms": 182, "baseline_elapsed_ms": null, "evidence_summary": "입력값이 인코딩 없이 응답에 반사되었습니다.", "html_path": "responses/XSS-001.html"}, "rule": {"label": "SUSPECTED", "reason": "페이로드가 실행 가능한 HTML 영역에 반사되었습니다."}, "error": null},
+      "ai": {"status": "COMPLETED", "status_reason": null, "label": "INCONCLUSIVE", "confidence": null, "needs_human_review": true, "assessment_summary": "반사된 입력을 근거로 추가 검토가 필요합니다.", "source_evidence": "E1은 원본 script 태그의 반사를 기록합니다.", "impact": "실행 컨텍스트라면 브라우저 영향이 있을 수 있습니다.", "recommendation": "출력 컨텍스트 인코딩을 적용합니다.", "manual_check": "격리된 브라우저에서 실행 여부를 확인합니다.", "report_paragraph": "근거 기반 검토 결과 수동 확인이 필요합니다.", "error": null, "role": "EVIDENCE_GROUNDED_REPORTING", "grounding_status": "GROUNDED", "claims": [{"claim_id": "C1", "claim_type": "OBSERVATION", "text": "입력 반사가 관찰되었습니다.", "evidence_ids": ["E1"], "reference_ids": ["R1"]}, {"claim_id": "C2", "claim_type": "IMPACT", "text": "실행 시 브라우저에 영향을 줄 수 있습니다.", "evidence_ids": ["E1"], "reference_ids": ["R1"]}, {"claim_id": "C3", "claim_type": "RECOMMENDATION", "text": "출력 인코딩을 적용합니다.", "evidence_ids": ["E1"], "reference_ids": ["R1"]}, {"claim_id": "C4", "claim_type": "MANUAL_CHECK", "text": "브라우저에서 재현합니다.", "evidence_ids": ["E1"], "reference_ids": ["R1"]}], "references": [{"reference_id": "R1", "source_id": "owasp-xss", "publisher": "OWASP", "title": "Cross Site Scripting Prevention Cheat Sheet", "version": "2026", "section": "Output Encoding", "canonical_url": "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html", "file_id": "owasp-xss-prevention", "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}], "provenance": {"model": "gpt-5", "prompt_version": "evidence-v1", "knowledge_base_version": "kb-2026-08", "output_schema_version": "1.1", "retrieval_policy_version": "official-only-v1", "vector_store_ids": ["vs-official"], "retrieved_file_ids": ["owasp-xss-prevention"], "generated_at": "2026-08-27T09:30:11+09:00"}}
     },
     {
-      "case_id": "xss-reflected-b",
-      "finding_id": "XSS-002",
-      "scanned_at": "2026-08-27T09:30:15+09:00",
-      "vuln_type": "XSS",
-      "scan": {
-        "status": "COMPLETED",
-        "request": {"url": "http://127.0.0.1:5000/case/xss-b", "method": "GET", "input_location": "query", "parameter": "name", "payload": "<script>alert(1)</script>"},
-        "response": {"http_status": 200, "elapsed_ms": 170, "baseline_elapsed_ms": null, "evidence_summary": "입력값의 꺾쇠 문자가 HTML entity로 변환되었습니다.", "html_path": "responses/XSS-002.html"},
-        "rule": {"label": "SUSPECTED", "reason": "페이로드 문자열이 응답에 존재하여 후보로 수집했습니다."},
-        "error": null
-      },
-      "ai": {
-        "status": "COMPLETED",
-        "status_reason": null,
-        "label": "SAFE",
-        "confidence": 0.96,
-        "needs_human_review": false,
-        "assessment_summary": "위험 문자가 HTML entity로 변환되어 실행되지 않습니다.",
-        "source_evidence": "응답에는 &lt;script&gt; 문자열만 존재합니다.",
-        "impact": "현재 증거에서는 스크립트 실행 가능성이 확인되지 않았습니다.",
-        "recommendation": "현재의 출력 인코딩을 유지하고 회귀 테스트를 추가합니다.",
-        "manual_check": "브라우저 DOM에서 text node로 처리되는지 확인합니다.",
-        "report_paragraph": "해당 입력은 안전하게 인코딩되어 XSS 실행 가능성이 확인되지 않았습니다.",
-        "error": null
-      }
+      "case_id": "xss-reflected-b", "finding_id": "XSS-002", "scanned_at": "2026-08-27T09:30:15+09:00", "vuln_type": "XSS",
+      "scan": {"status": "COMPLETED", "request": {"url": "http://127.0.0.1:5000/case/xss-b", "method": "GET", "input_location": "query", "parameter": "name", "payload": "<script>alert(1)</script>"}, "response": {"http_status": 200, "elapsed_ms": 170, "baseline_elapsed_ms": null, "evidence_summary": "문맥 정보가 충분하지 않습니다.", "html_path": "responses/XSS-002.html"}, "rule": {"label": "SUSPECTED", "reason": "후보 신호가 수집되었습니다."}, "error": null},
+      "ai": {"status": "COMPLETED", "status_reason": "POLICY_EXCLUDED", "label": "INCONCLUSIVE", "confidence": null, "needs_human_review": true, "assessment_summary": "허용된 근거만으로는 분석을 완료할 수 없습니다.", "source_evidence": null, "impact": null, "recommendation": null, "manual_check": null, "report_paragraph": null, "error": null, "role": "EVIDENCE_GROUNDED_REPORTING", "grounding_status": "INSUFFICIENT", "claims": [], "references": [], "provenance": {"model": "gpt-5", "prompt_version": "evidence-v1", "knowledge_base_version": "kb-2026-08", "output_schema_version": "1.1", "retrieval_policy_version": "official-only-v1", "vector_store_ids": ["vs-official"], "retrieved_file_ids": [], "generated_at": "2026-08-27T09:30:16+09:00"}}
     },
     {
-      "case_id": "xss-reflected-c",
-      "finding_id": "XSS-003",
-      "scanned_at": "2026-08-27T09:30:20+09:00",
-      "vuln_type": "XSS",
-      "scan": {
-        "status": "COMPLETED",
-        "request": {"url": "http://127.0.0.1:5000/case/xss-c", "method": "GET", "input_location": "query", "parameter": "name", "payload": "<img src=x onerror=alert(1)>"},
-        "response": {"http_status": 200, "elapsed_ms": 176, "baseline_elapsed_ms": null, "evidence_summary": "페이로드 일부가 응답에 반사되었으나 실행 위치가 불명확합니다.", "html_path": "responses/XSS-003.html"},
-        "rule": {"label": "SUSPECTED", "reason": "실행 가능성을 배제할 수 없어 후보로 수집했습니다."},
-        "error": null
-      },
-      "ai": {
-        "status": "COMPLETED",
-        "status_reason": null,
-        "label": "INCONCLUSIVE",
-        "confidence": 0.45,
-        "needs_human_review": true,
-        "assessment_summary": "제공된 증거만으로 이벤트 핸들러의 실행 컨텍스트를 확정할 수 없습니다.",
-        "source_evidence": "페이로드 일부가 존재하지만 DOM 위치 정보가 부족합니다.",
-        "impact": "실행 가능한 위치라면 사용자 브라우저에서 스크립트가 실행될 수 있습니다.",
-        "recommendation": "DOM 기반 실행 여부를 수동으로 확인하고 출력 인코딩을 점검합니다.",
-        "manual_check": "격리된 브라우저에서 DOM과 이벤트 실행 여부를 확인합니다.",
-        "report_paragraph": "해당 입력은 추가 수동 검토가 필요합니다.",
-        "error": null
-      }
+      "case_id": "xss-reflected-c", "finding_id": "XSS-003", "scanned_at": "2026-08-27T09:30:20+09:00", "vuln_type": "XSS",
+      "scan": {"status": "COMPLETED", "request": {"url": "http://127.0.0.1:5000/case/xss-c", "method": "GET", "input_location": "query", "parameter": "name", "payload": "<img src=x onerror=alert(1)>"}, "response": {"http_status": 200, "elapsed_ms": 176, "baseline_elapsed_ms": null, "evidence_summary": "페이로드 일부가 반사되었습니다.", "html_path": "responses/XSS-003.html"}, "rule": {"label": "SUSPECTED", "reason": "실행 가능성을 배제할 수 없습니다."}, "error": null},
+      "ai": {"status": "COMPLETED", "status_reason": null, "label": "INCONCLUSIVE", "confidence": null, "needs_human_review": true, "assessment_summary": "DOM 위치 검토가 필요합니다.", "source_evidence": "E1은 이벤트 속성 문자열을 기록합니다.", "impact": "실행 위치라면 사용자에게 영향을 줄 수 있습니다.", "recommendation": "DOM 컨텍스트별 인코딩을 적용합니다.", "manual_check": "DOM과 이벤트 실행을 확인합니다.", "report_paragraph": "근거를 바탕으로 수동 검토가 필요합니다.", "error": null, "role": "EVIDENCE_GROUNDED_REPORTING", "grounding_status": "GROUNDED", "claims": [{"claim_id": "C1", "claim_type": "OBSERVATION", "text": "이벤트 속성 문자열이 관찰되었습니다.", "evidence_ids": ["E1"], "reference_ids": ["R1"]}, {"claim_id": "C2", "claim_type": "IMPACT", "text": "스크립트 실행 가능성을 검토합니다.", "evidence_ids": ["E1"], "reference_ids": ["R1"]}, {"claim_id": "C3", "claim_type": "RECOMMENDATION", "text": "문맥별 인코딩을 적용합니다.", "evidence_ids": ["E1"], "reference_ids": ["R1"]}, {"claim_id": "C4", "claim_type": "MANUAL_CHECK", "text": "DOM을 수동 검증합니다.", "evidence_ids": ["E1"], "reference_ids": ["R1"]}], "references": [{"reference_id": "R1", "source_id": "owasp-xss", "publisher": "OWASP", "title": "Cross Site Scripting Prevention Cheat Sheet", "version": "2026", "section": "Output Encoding", "canonical_url": "https://owasp.org/www-community/attacks/xss/", "file_id": "owasp-xss-community", "document_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}], "provenance": {"model": "gpt-5", "prompt_version": "evidence-v1", "knowledge_base_version": "kb-2026-08", "output_schema_version": "1.1", "retrieval_policy_version": "official-only-v1", "vector_store_ids": ["vs-official"], "retrieved_file_ids": ["owasp-xss-community"], "generated_at": "2026-08-27T09:30:21+09:00"}}
     },
     {
-      "case_id": "sqli-search-a",
-      "finding_id": "SQLI-001",
-      "scanned_at": "2026-08-27T09:30:30+09:00",
-      "vuln_type": "SQLI",
-      "scan": {
-        "status": "COMPLETED",
-        "request": {"url": "http://127.0.0.1:5000/case/sqli-a", "method": "GET", "input_location": "query", "parameter": "id", "payload": "' OR 1=1 --"},
-        "response": {"http_status": 200, "elapsed_ms": 205, "baseline_elapsed_ms": 180, "evidence_summary": "참 조건에서 정상 요청보다 많은 결과가 반환되었습니다.", "html_path": "responses/SQLI-001.html"},
-        "rule": {"label": "SUSPECTED", "reason": "참·거짓 조건에 따라 응답 건수가 달라졌습니다."},
-        "error": null
-      },
-      "ai": {
-        "status": "COMPLETED",
-        "status_reason": null,
-        "label": "VULNERABLE",
-        "confidence": 0.93,
-        "needs_human_review": false,
-        "assessment_summary": "논리 조건에 따라 결과 건수가 달라져 SQL 구문 개입 가능성이 높습니다.",
-        "source_evidence": "참 조건과 거짓 조건의 응답 차이가 반복 확인되었습니다.",
-        "impact": "비인가 데이터 조회 또는 인증 우회가 발생할 수 있습니다.",
-        "recommendation": "매개변수화된 쿼리를 사용하고 DB 오류 노출을 차단합니다.",
-        "manual_check": "Burp Suite에서 참·거짓 요청 쌍을 재현합니다.",
-        "report_paragraph": "해당 파라미터에서 SQL Injection 취약 가능성이 확인되었습니다.",
-        "error": null
-      }
+      "case_id": "sqli-search-a", "finding_id": "SQLI-001", "scanned_at": "2026-08-27T09:30:30+09:00", "vuln_type": "SQLI",
+      "scan": {"status": "COMPLETED", "request": {"url": "http://127.0.0.1:5000/case/sqli-a", "method": "GET", "input_location": "query", "parameter": "id", "payload": "' OR 1=1 --"}, "response": {"http_status": 200, "elapsed_ms": 205, "baseline_elapsed_ms": 180, "evidence_summary": "조건에 따라 결과가 달라졌습니다.", "html_path": "responses/SQLI-001.html"}, "rule": {"label": "SUSPECTED", "reason": "응답 차이가 반복되었습니다."}, "error": null},
+      "ai": {"status": "COMPLETED", "status_reason": null, "label": "INCONCLUSIVE", "confidence": null, "needs_human_review": true, "assessment_summary": "응답 차이에 대한 수동 검증이 필요합니다.", "source_evidence": "E1은 참 조건 응답 차이를 기록합니다.", "impact": "쿼리 동작에 영향을 줄 가능성이 있습니다.", "recommendation": "매개변수화된 쿼리를 사용합니다.", "manual_check": "참과 거짓 요청을 재현합니다.", "report_paragraph": "근거 기반 검토 결과 추가 검증이 필요합니다.", "error": null, "role": "EVIDENCE_GROUNDED_REPORTING", "grounding_status": "GROUNDED", "claims": [{"claim_id": "C1", "claim_type": "OBSERVATION", "text": "응답 차이가 관찰되었습니다.", "evidence_ids": ["E1"], "reference_ids": ["R1"]}, {"claim_id": "C2", "claim_type": "IMPACT", "text": "데이터 접근 영향 가능성이 있습니다.", "evidence_ids": ["E1"], "reference_ids": ["R1"]}, {"claim_id": "C3", "claim_type": "RECOMMENDATION", "text": "매개변수 바인딩을 사용합니다.", "evidence_ids": ["E1"], "reference_ids": ["R1"]}, {"claim_id": "C4", "claim_type": "MANUAL_CHECK", "text": "요청 쌍을 재현합니다.", "evidence_ids": ["E1"], "reference_ids": ["R1"]}], "references": [{"reference_id": "R1", "source_id": "owasp-sqli", "publisher": "OWASP", "title": "SQL Injection Prevention Cheat Sheet", "version": "2026", "section": "Primary Defenses", "canonical_url": "https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html", "file_id": "owasp-sqli-prevention", "document_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}], "provenance": {"model": "gpt-5", "prompt_version": "evidence-v1", "knowledge_base_version": "kb-2026-08", "output_schema_version": "1.1", "retrieval_policy_version": "official-only-v1", "vector_store_ids": ["vs-official"], "retrieved_file_ids": ["owasp-sqli-prevention"], "generated_at": "2026-08-27T09:30:31+09:00"}}
     },
     {
-      "case_id": "sqli-search-b",
-      "finding_id": "SQLI-002",
-      "scanned_at": "2026-08-27T09:30:40+09:00",
-      "vuln_type": "SQLI",
-      "scan": {
-        "status": "COMPLETED",
-        "request": {"url": "http://127.0.0.1:5000/case/sqli-b", "method": "GET", "input_location": "query", "parameter": "id", "payload": "' OR 1=1 --"},
-        "response": {"http_status": 200, "elapsed_ms": 184, "baseline_elapsed_ms": 181, "evidence_summary": "공격값과 정상값의 응답 차이가 발견되지 않았습니다.", "html_path": "responses/SQLI-002.html"},
-        "rule": {"label": "SAFE", "reason": "DB 오류, 응답 차이와 시간 지연 신호가 없습니다."},
-        "error": null
-      },
-      "ai": {
-        "status": "NOT_REQUESTED",
-        "status_reason": "RULE_NOT_SUSPECTED",
-        "label": null,
-        "confidence": null,
-        "needs_human_review": false,
-        "assessment_summary": null,
-        "source_evidence": null,
-        "impact": null,
-        "recommendation": null,
-        "manual_check": null,
-        "report_paragraph": null,
-        "error": null
-      }
+      "case_id": "sqli-search-b", "finding_id": "SQLI-002", "scanned_at": "2026-08-27T09:30:40+09:00", "vuln_type": "SQLI",
+      "scan": {"status": "COMPLETED", "request": {"url": "http://127.0.0.1:5000/case/sqli-b", "method": "GET", "input_location": "query", "parameter": "id", "payload": "' OR 1=1 --"}, "response": {"http_status": 200, "elapsed_ms": 184, "baseline_elapsed_ms": 181, "evidence_summary": "응답 차이가 없습니다.", "html_path": "responses/SQLI-002.html"}, "rule": {"label": "SAFE", "reason": "DB 오류와 시간 지연 신호가 없습니다."}, "error": null},
+      "ai": {"status": "NOT_REQUESTED", "status_reason": "RULE_NOT_SUSPECTED", "label": null, "confidence": null, "needs_human_review": false, "assessment_summary": null, "source_evidence": null, "impact": null, "recommendation": null, "manual_check": null, "report_paragraph": null, "error": null, "role": "EVIDENCE_GROUNDED_REPORTING", "grounding_status": "NOT_APPLICABLE", "claims": [], "references": [], "provenance": null}
     },
     {
-      "case_id": "sqli-search-c",
-      "finding_id": "SQLI-003",
-      "scanned_at": "2026-08-27T09:30:50+09:00",
-      "vuln_type": "SQLI",
-      "scan": {
-        "status": "FAILED",
-        "request": {"url": "http://127.0.0.1:5000/case/sqli-c", "method": "GET", "input_location": "query", "parameter": "id", "payload": "' AND SLEEP(5) --"},
-        "response": {"http_status": null, "elapsed_ms": null, "baseline_elapsed_ms": null, "evidence_summary": null, "html_path": null},
-        "rule": {"label": null, "reason": null},
-        "error": {"code": "SCAN_TIMEOUT", "message": "대상 요청 시간이 초과되었습니다.", "retryable": true}
-      },
-      "ai": {
-        "status": "NOT_REQUESTED",
-        "status_reason": "SCAN_FAILED",
-        "label": null,
-        "confidence": null,
-        "needs_human_review": true,
-        "assessment_summary": null,
-        "source_evidence": null,
-        "impact": null,
-        "recommendation": null,
-        "manual_check": null,
-        "report_paragraph": null,
-        "error": null
-      }
+      "case_id": "sqli-search-c", "finding_id": "SQLI-003", "scanned_at": "2026-08-27T09:30:50+09:00", "vuln_type": "SQLI",
+      "scan": {"status": "FAILED", "request": {"url": "http://127.0.0.1:5000/case/sqli-c", "method": "GET", "input_location": "query", "parameter": "id", "payload": "' AND SLEEP(5) --"}, "response": {"http_status": null, "elapsed_ms": null, "baseline_elapsed_ms": null, "evidence_summary": null, "html_path": null}, "rule": {"label": null, "reason": null}, "error": {"code": "SCAN_TIMEOUT", "message": "대상 요청 시간이 초과되었습니다.", "retryable": true}},
+      "ai": {"status": "NOT_REQUESTED", "status_reason": "SCAN_FAILED", "label": null, "confidence": null, "needs_human_review": true, "assessment_summary": null, "source_evidence": null, "impact": null, "recommendation": null, "manual_check": null, "report_paragraph": null, "error": null, "role": "EVIDENCE_GROUNDED_REPORTING", "grounding_status": "NOT_APPLICABLE", "claims": [], "references": [], "provenance": null}
     },
     {
-      "case_id": "sqli-search-d",
-      "finding_id": "SQLI-004",
-      "scanned_at": "2026-08-27T09:31:00+09:00",
-      "vuln_type": "SQLI",
-      "scan": {
-        "status": "COMPLETED",
-        "request": {"url": "http://127.0.0.1:5000/case/sqli-d", "method": "GET", "input_location": "query", "parameter": "id", "payload": "' UNION SELECT NULL --"},
-        "response": {"http_status": 500, "elapsed_ms": 220, "baseline_elapsed_ms": 178, "evidence_summary": "MySQL 구문 오류가 응답에 노출되었습니다.", "html_path": "responses/SQLI-004.html"},
-        "rule": {"label": "SUSPECTED", "reason": "DB 오류 메시지가 노출되었습니다."},
-        "error": null
-      },
-      "ai": {
-        "status": "FAILED",
-        "status_reason": null,
-        "label": null,
-        "confidence": null,
-        "needs_human_review": true,
-        "assessment_summary": null,
-        "source_evidence": null,
-        "impact": null,
-        "recommendation": null,
-        "manual_check": null,
-        "report_paragraph": null,
-        "error": {"code": "AI_TIMEOUT", "message": "AI 판정 요청 시간이 초과되었습니다.", "retryable": true}
-      }
+      "case_id": "sqli-search-d", "finding_id": "SQLI-004", "scanned_at": "2026-08-27T09:31:00+09:00", "vuln_type": "SQLI",
+      "scan": {"status": "COMPLETED", "request": {"url": "http://127.0.0.1:5000/case/sqli-d", "method": "GET", "input_location": "query", "parameter": "id", "payload": "' UNION SELECT NULL --"}, "response": {"http_status": 500, "elapsed_ms": 220, "baseline_elapsed_ms": 178, "evidence_summary": "DB 오류가 노출되었습니다.", "html_path": "responses/SQLI-004.html"}, "rule": {"label": "SUSPECTED", "reason": "DB 오류 메시지가 노출되었습니다."}, "error": null},
+      "ai": {"status": "FAILED", "status_reason": null, "label": null, "confidence": null, "needs_human_review": true, "assessment_summary": null, "source_evidence": null, "impact": null, "recommendation": null, "manual_check": null, "report_paragraph": null, "error": {"code": "AI_TIMEOUT", "message": "AI 요청 시간이 초과되었습니다.", "retryable": true}, "role": "EVIDENCE_GROUNDED_REPORTING", "grounding_status": "NOT_APPLICABLE", "claims": [], "references": [], "provenance": {"model": "gpt-5", "prompt_version": "evidence-v1", "knowledge_base_version": "kb-2026-08", "output_schema_version": "1.1", "retrieval_policy_version": "official-only-v1", "vector_store_ids": ["vs-official"], "retrieved_file_ids": [], "generated_at": "2026-08-27T09:31:01+09:00"}}
     }
   ]
 }

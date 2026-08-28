@@ -4,7 +4,7 @@
 
 이 문서는 환경 구축팀, XSS·SQLi 담당, OpenAI·데이터 처리 담당, 대시보드·Excel 담당 사이의 데이터 전달 규격을 정의한다.
 
-- 계약 버전은 `1.0`이다.
+- RawRun은 `1.0`을 유지한다. ProcessedRun은 기존 reader용 `1.0`과 근거 기반 writer용 `1.1`을 지원한다.
 - JSON이 기준 형식이며 CSV와 Excel은 파생 export다.
 - 생산자와 소비자는 같은 필드명, 자료형, enum과 null 규칙을 사용한다.
 - 계약 변경 시 문서와 샘플을 같은 커밋에서 수정하고 버전을 올린다.
@@ -226,7 +226,7 @@ raw envelope의 식별·시각·상태 필드를 유지한다. `findings`는 raw
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "scan_run_id": "run-20260827-01",
   "target_set_id": "local-lab-v1",
   "started_at": "2026-08-27T09:30:00+09:00",
@@ -283,6 +283,44 @@ raw envelope의 식별·시각·상태 필드를 유지한다. `findings`는 raw
 - label, confidence와 모든 생성 문장은 `null`이다.
 - `needs_human_review=true`
 - `error`가 필수다.
+
+### 5.4.1 ProcessedRun 1.1 근거 기반 AI 결과
+
+`schema_version=1.1`의 모든 Finding은
+`ai.role=EVIDENCE_GROUNDED_REPORTING`이어야 한다. 이 role의 AI는 최종
+취약·안전 판정을 하지 않는다. 따라서 완료 결과의 `label`은 항상
+`INCONCLUSIVE`, `confidence=null`, `needs_human_review=true`다. ground truth는
+AI 입력, 모델 출력, ProcessedRun에 포함하지 않는다.
+
+`claims`는 `claim_id`, `claim_type`, `text`, `evidence_ids`, `reference_ids`로
+구성한다. `claim_id`는 Finding 안에서 유일하고 비어 있지 않으며,
+`claim_type`은 `OBSERVATION`, `IMPACT`, `RECOMMENDATION`, `MANUAL_CHECK` 중
+하나다. `GROUNDED` 결과에는 네 종류가 각각 하나 이상 필요하다.
+`evidence_ids`는 `E` 뒤에 양의 정수를 붙인 형식이고, 모든
+`reference_ids`는 같은 Finding의 `references.reference_id`를 가리켜야 한다.
+
+`references`의 `reference_id`는 Finding 안에서 유일하다. official reference
+metadata는 애플리케이션이 생성하며 모델 출력의 값을 신뢰하지 않는다.
+각 reference에는 `source_id`, `publisher`, `title`, `version`, `section`,
+`canonical_url`, `file_id`, 64자 소문자 SHA-256 `document_sha256`가 필요하다.
+`canonical_url`은 자격증명·query·fragment가 없는 HTTPS OWASP 또는 KISA
+allowlist 도메인 URL이어야 한다.
+
+`provenance`는 `model`, `prompt_version`, `knowledge_base_version`,
+`output_schema_version="1.1"`, `retrieval_policy_version`,
+`vector_store_ids`, `retrieved_file_ids`, timezone이 있는 `generated_at`을
+기록한다.
+
+| AI 상태와 grounding 상태 | 필수 불변 조건 |
+| --- | --- |
+| `COMPLETED` + `GROUNDED` | `status_reason/error=null`, 모든 생성 문장 nonblank, claims와 references가 각각 하나 이상, provenance 필수 |
+| `COMPLETED` + `INSUFFICIENT` | `status_reason=POLICY_EXCLUDED`, `assessment_summary`만 nonblank, `impact/recommendation/manual_check/report_paragraph=null`, references 비어 있음, provenance 필수 |
+| `NOT_REQUESTED` + `NOT_APPLICABLE` | 기존 NOT_REQUESTED 규칙을 따르고 claims, references, provenance가 없음 |
+| `FAILED` + `NOT_APPLICABLE` | 생성 문장, claims, references가 없고 안전한 `error`가 필수; provenance는 허용 |
+
+`schema_version=1.0` Finding은 `ai.role=null`이어야 하며 기존 1.0 상태
+불변 조건을 그대로 적용한다. 1.0과 1.1 AI 결과를 하나의 ProcessedRun에
+섞을 수 없다.
 
 ### 5.5 run status
 
