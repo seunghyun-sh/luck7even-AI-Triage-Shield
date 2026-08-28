@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 configs/deployments.local.json
+configs/knowledge-base.local.json
 
 # Python
 __pycache__/

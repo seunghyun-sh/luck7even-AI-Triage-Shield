@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "knowledge_base_version": "owasp-top-10-2021",
+  "vector_store_ids": [
+    "VECTOR_STORE_ID_REPLACE_WITH_PRIVATE_VALUE"
+  ],
+  "files": [
+    {
+      "file_id": "FILE_ID_REPLACE_WITH_PRIVATE_VALUE",
+      "source_id": "owasp-top-10-2021-a03-injection",
+      "publisher": "OWASP",
+      "title": "OWASP Top 10:2021",
+      "version": "2021",
+      "section": "A03:2021 – Injection",
+      "canonical_url": "https://owasp.org/Top10/A03_2021-Injection/",
+      "document_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "vuln_types": [
+        "XSS",
+        "SQLI"
+      ],
+      "language": "en"
+    }
+  ]
+}
