@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}문의 미리보기 · Lumi Market{% endblock %}
+{% block content %}
+  <section class="page-hero compact">
+    <p class="eyebrow dark">MESSAGE PREVIEW</p>
+    <h1>문의 내용 미리보기</h1>
+    <p>접수 전에 고객센터에 전달될 내용을 확인해 주세요.</p>
+  </section>
+  <section class="section container preview-shell" data-support-preview data-security-mode="{{ security_mode }}">
+    <form class="preview-editor stacked-form" data-preview-form>
+      <label for="preview-message">문의 내용</label>
+      <textarea id="preview-message" rows="7" data-preview-input placeholder="문의 내용을 입력하세요"></textarea>
+      <button class="button primary" type="submit">미리보기 적용</button>
+    </form>
+    <article class="preview-paper">
+      <p class="eyebrow dark">PREVIEW</p>
+      <h2>고객 문의</h2>
+      <div class="preview-message" data-preview-output>왼쪽에서 내용을 입력해 주세요.</div>
+    </article>
+  </section>
+{% endblock %}

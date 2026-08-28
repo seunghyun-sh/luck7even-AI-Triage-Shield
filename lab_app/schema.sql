@@ -3,6 +3,7 @@ DROP TABLE IF EXISTS products;
 DROP TABLE IF EXISTS reviews;
 DROP TABLE IF EXISTS notices;
 DROP TABLE IF EXISTS inquiries;
+DROP TABLE IF EXISTS coupons;
 
 CREATE TABLE users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,6 +54,14 @@ CREATE TABLE inquiries (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE coupons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    discount_percent INTEGER NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    expires_at TEXT
+);
+
 INSERT INTO users (username, password, display_name, email, role) VALUES
     ('admin', 'training-admin-only', 'Lumi 관리자', 'admin@example.test', 'admin'),
     ('analyst', 'training-analyst-only', '보안 분석가', 'analyst@example.test', 'analyst'),
@@ -80,3 +89,7 @@ INSERT INTO notices (title, content) VALUES
     ('교환 및 반품 정책', '상품 수령 후 7일 이내 고객센터로 접수해 주세요.'),
     ('신규 회원 혜택', '가입 즉시 사용할 수 있는 웰컴 쿠폰을 제공합니다.');
 
+INSERT INTO coupons (code, discount_percent, active, expires_at) VALUES
+    ('WELCOME10', 10, 1, '2026-12-31'),
+    ('LUMI20', 20, 1, '2026-09-30'),
+    ('EXPIRED5', 5, 0, '2026-01-31');

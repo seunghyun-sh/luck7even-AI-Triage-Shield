@@ -6,13 +6,10 @@
   </section>
   <section class="section container">
     {% if keyword %}
-      <!-- Intentionally unsafe output for the authorized reflected-XSS lab. -->
-      <div class="search-summary"><strong>“{{ keyword | safe }}”</strong> 검색 결과 <span>{{ products|length }}건</span></div>
-      {% if error %}<div class="form-error" data-testid="sql-error">검색 처리 중 오류가 발생했습니다: {{ error }}</div>{% endif %}
-      <div class="product-grid">{% for product in products %}{% include "_product_card.html" %}{% else %}{% if not error %}<div class="empty-state"><h2>검색 결과가 없습니다</h2><p>철자나 검색어를 바꿔 다시 시도해 보세요.</p></div>{% endif %}{% endfor %}</div>
+      <div class="search-summary"><strong>“{% if vulnerable %}{{ keyword | safe }}{% else %}{{ keyword }}{% endif %}”</strong> 검색 결과 <span>{{ products|length }}건</span></div>
+      <div class="product-grid">{% for product in products %}{% include "_product_card.html" %}{% else %}<div class="empty-state"><h2>검색 결과가 없습니다</h2><p>철자나 검색어를 바꿔 다시 시도해 보세요.</p></div>{% endfor %}</div>
     {% else %}
       <div class="popular-search"><h2>인기 검색어</h2><div>{% for term in ['헤드폰', '가습기', '램프', '백팩', '노트'] %}<a href="{{ url_for('storefront.search', q=term) }}">{{ loop.index }}. {{ term }}</a>{% endfor %}</div></div>
     {% endif %}
   </section>
 {% endblock %}
-

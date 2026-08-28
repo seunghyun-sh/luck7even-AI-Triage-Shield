@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}쿠폰 확인 · Lumi Market{% endblock %}
+{% block content %}
+  <section class="page-hero compact">
+    <p class="eyebrow dark">COUPON</p>
+    <h1>쿠폰 혜택 확인</h1>
+    <p>보유한 쿠폰 코드를 입력해 적용 가능한 혜택을 확인하세요.</p>
+    <form class="large-search" method="get">
+      <input name="code" value="{{ code }}" placeholder="쿠폰 코드 입력" autocomplete="off">
+      <button type="submit">확인</button>
+    </form>
+  </section>
+  <section class="section container coupon-result">
+    {% if checked and coupon %}
+      <div class="form-success" data-testid="coupon-valid"><strong>{{ coupon['code'] }}</strong> 쿠폰을 사용할 수 있습니다. {{ coupon['discount_percent'] }}% 할인 혜택이 적용됩니다.</div>
+    {% elif checked %}
+      <div class="form-error" data-testid="coupon-invalid">사용할 수 없는 쿠폰입니다.</div>
+    {% else %}
+      <div class="empty-state"><h2>쿠폰 코드를 입력해 주세요</h2><p>신규 회원에게는 WELCOME10 쿠폰이 제공됩니다.</p></div>
+    {% endif %}
+  </section>
+{% endblock %}

@@ -8,8 +8,7 @@
         {% for item in cart_items %}<article class="cart-item"><div class="cart-thumb accent-{{ item.product['accent'] }}">{{ item.product['name'][0] }}</div><div><span class="category-label">{{ item.product['category'] }}</span><h2>{{ item.product['name'] }}</h2><p>수량 {{ item.quantity }}개</p></div><strong>{{ "{:,}".format(item.subtotal) }}원</strong></article>{% endfor %}
         <form method="post" action="{{ url_for('storefront.clear_cart') }}"><button class="link-button" type="submit">장바구니 비우기</button></form>
       </div>
-      <aside class="order-box"><h2>결제 예정 금액</h2><div><span>상품금액</span><strong>{{ "{:,}".format(total) }}원</strong></div><div><span>배송비</span><strong>무료</strong></div><div class="order-total"><span>총 결제금액</span><strong>{{ "{:,}".format(total) }}원</strong></div><button class="button primary wide" type="button">주문하기</button></aside>
+      <aside class="order-box"><h2>결제 예정 금액</h2><div><span>상품금액</span><strong>{{ "{:,}".format(total) }}원</strong></div><div><span>배송비</span><strong>무료</strong></div><div class="order-total"><span>총 결제금액</span><strong>{{ "{:,}".format(total) }}원</strong></div><a class="coupon-link" href="{{ url_for('storefront.coupon_check') }}">보유 쿠폰 확인 →</a><button class="button primary wide" type="button">주문하기</button></aside>
     {% else %}<div class="empty-state full"><h2>장바구니가 비어 있습니다</h2><p>마음에 드는 상품을 담아보세요.</p><a class="button primary" href="{{ url_for('storefront.products') }}">쇼핑 계속하기</a></div>{% endif %}
   </section>
 {% endblock %}
-

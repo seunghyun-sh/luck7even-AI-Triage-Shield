@@ -1,6 +1,6 @@
 """Reviews and customer-support pages."""
 
-from flask import Blueprint, redirect, render_template, request, url_for
+from flask import Blueprint, current_app, redirect, render_template, request, url_for
 
 from lab_app.db import get_db
 
@@ -25,7 +25,11 @@ def reviews():
         db.commit()
         return redirect(url_for("community.reviews"))
     entries = db.execute("SELECT * FROM reviews ORDER BY id DESC").fetchall()
-    return render_template("reviews.html", reviews=entries)
+    return render_template(
+        "reviews.html",
+        reviews=entries,
+        vulnerable=current_app.config["LAB_1_SECURITY_MODE"] == "vulnerable",
+    )
 
 
 @community_bp.route("/support", methods=("GET", "POST"))
@@ -47,3 +51,10 @@ def support():
     notices = db.execute("SELECT * FROM notices ORDER BY id DESC").fetchall()
     return render_template("support.html", notices=notices, submitted=submitted)
 
+
+@community_bp.get("/support/preview")
+def support_preview():
+    return render_template(
+        "support_preview.html",
+        security_mode=current_app.config["LAB_1_SECURITY_MODE"],
+    )

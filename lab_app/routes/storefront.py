@@ -1,10 +1,17 @@
-"""Public storefront pages."""
+"""Public storefront pages and the two MySQL blind-SQLi targets."""
 
-import sqlite3
+from flask import (
+    Blueprint,
+    current_app,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 
-from flask import Blueprint, redirect, render_template, request, session, url_for
-
-from lab_app.db import get_db
+from lab_app.db import DATABASE_ERRORS, get_db
 
 storefront_bp = Blueprint("storefront", __name__)
 
@@ -59,24 +66,80 @@ def product_detail(product_id: int):
 def search():
     keyword = request.args.get("q", "")
     results = []
-    error = None
     if keyword:
-        # Intentionally vulnerable: input is concatenated into SQL for the lab.
-        query = (
+        pattern = f"%{keyword}%"
+        results = get_db().execute(
             "SELECT * FROM products "
-            f"WHERE name LIKE '%{keyword}%' OR description LIKE '%{keyword}%' "
-            "ORDER BY id"
-        )
-        try:
-            results = get_db().execute(query).fetchall()
-        except sqlite3.Error as exc:
-            # Intentionally exposed to support error-based SQLi assessment.
-            error = str(exc)
+            "WHERE name LIKE ? OR description LIKE ? ORDER BY id",
+            (pattern, pattern),
+        ).fetchall()
     return render_template(
         "search.html",
         keyword=keyword,
         products=results,
-        error=error,
+        vulnerable=current_app.config["LAB_1_SECURITY_MODE"] == "vulnerable",
+    )
+
+
+@storefront_bp.get("/products/stock")
+def stock_status():
+    """Boolean-based blind SQLi target with a compact storefront JSON response."""
+    product_id = request.args.get("product_id", "")
+    vulnerable = current_app.config["LAB_1_SECURITY_MODE"] == "vulnerable"
+
+    try:
+        if vulnerable:
+            # Intentionally vulnerable: the numeric expression is concatenated.
+            query = f"SELECT id, stock FROM products WHERE id = {product_id or '0'}"
+            product = get_db().execute(query).fetchone()
+        else:
+            try:
+                normalized_id = int(product_id)
+            except ValueError:
+                return jsonify(status="invalid", available=False), 400
+            product = get_db().execute(
+                "SELECT id, stock FROM products WHERE id = ?",
+                (normalized_id,),
+            ).fetchone()
+    except DATABASE_ERRORS:
+        product = None
+
+    if product is None:
+        return jsonify(status="unavailable", available=False)
+    return jsonify(
+        status="in_stock" if product["stock"] > 0 else "sold_out",
+        available=product["stock"] > 0,
+    )
+
+
+@storefront_bp.get("/coupon/check")
+def coupon_check():
+    """Coupon page containing the controlled MySQL time-based blind target."""
+    code = request.args.get("code", "")
+    coupon = None
+    checked = bool(code)
+    if checked:
+        try:
+            if current_app.config["LAB_1_SECURITY_MODE"] == "vulnerable":
+                # Intentionally vulnerable in the isolated training mode.
+                query = (
+                    "SELECT code, discount_percent FROM coupons "
+                    f"WHERE code = '{code}' AND active = 1\nLIMIT 1"
+                )
+                coupon = get_db().execute(query).fetchone()
+            else:
+                coupon = get_db().execute(
+                    "SELECT code, discount_percent FROM coupons "
+                    "WHERE code = ? AND active = 1 LIMIT 1",
+                    (code,),
+                ).fetchone()
+        except DATABASE_ERRORS:
+            coupon = None
+    return render_template(
+        "coupon.html",
+        code=code,
+        coupon=coupon,
+        checked=checked,
     )
 
 
@@ -117,4 +180,3 @@ def add_to_cart(product_id: int):
 def clear_cart():
     session.pop("cart", None)
     return redirect(url_for("storefront.cart"))
-
