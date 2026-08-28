@@ -1,0 +1,117 @@
+{
+  "schema_version": "1.0",
+  "target_set_id": "lumi-market-1",
+  "base_url": "http://<EC2_PUBLIC_IP>:5001",
+  "request_policy": {
+    "timeout_seconds": 10,
+    "follow_redirects": false
+  },
+  "targets": [
+    {
+      "case_id": "lab1-xss-reflected-search",
+      "vuln_type": "XSS",
+      "path": "/search",
+      "method": "GET",
+      "input": {
+        "location": "query",
+        "parameters": {
+          "q": "baseline"
+        },
+        "attack_parameter": "q"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "xss-v1",
+      "manual_verification_profile": "xss-reflection"
+    },
+    {
+      "case_id": "lab1-xss-stored-review",
+      "vuln_type": "XSS",
+      "path": "/reviews",
+      "method": "POST",
+      "input": {
+        "location": "form",
+        "parameters": {
+          "author": "scanner",
+          "title": "baseline review",
+          "content": "baseline",
+          "rating": "5"
+        },
+        "attack_parameter": "content"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "xss-v1",
+      "manual_verification_profile": "xss-stored-followup"
+    },
+    {
+      "case_id": "lab1-xss-dom-support-preview",
+      "vuln_type": "XSS",
+      "path": "/support/preview",
+      "method": "GET",
+      "input": {
+        "location": "fragment",
+        "parameters": {
+          "message": "baseline"
+        },
+        "attack_parameter": "message"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "xss-v1",
+      "manual_verification_profile": "xss-dom-browser"
+    },
+    {
+      "case_id": "lab1-sqli-login-auth-bypass",
+      "vuln_type": "SQLI",
+      "path": "/account/login",
+      "method": "POST",
+      "input": {
+        "location": "form",
+        "parameters": {
+          "username": "baseline",
+          "password": "baseline"
+        },
+        "attack_parameter": "username"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "sqli-default",
+      "manual_verification_profile": "sqli-auth-redirect"
+    },
+    {
+      "case_id": "lab1-sqli-boolean-stock",
+      "vuln_type": "SQLI",
+      "path": "/products/stock",
+      "method": "GET",
+      "input": {
+        "location": "query",
+        "parameters": {
+          "product_id": "1"
+        },
+        "attack_parameter": "product_id"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "sqli-default",
+      "manual_verification_profile": "sqli-response-difference"
+    },
+    {
+      "case_id": "lab1-sqli-time-coupon",
+      "vuln_type": "SQLI",
+      "path": "/coupon/check",
+      "method": "GET",
+      "input": {
+        "location": "query",
+        "parameters": {
+          "code": "baseline"
+        },
+        "attack_parameter": "code"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "sqli-default",
+      "manual_verification_profile": "sqli-response-time"
+    }
+  ]
+}

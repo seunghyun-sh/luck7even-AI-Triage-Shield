@@ -75,6 +75,32 @@ curl -X POST http://<Kali-IP>:5001/internal/lab-1/reset \
   -H "X-Lab-1-Reset-Token: <설정한 토큰>"
 ```
 
+## Scanner·대시보드 배포 식별
+
+배포 환경에서는 다음 identity 환경변수를 설정합니다.
+
+```env
+LAB_1_TARGET_SET_ID=lumi-market-1
+LAB_1_SERVICE=lumi-market
+LAB_1_DEPLOYMENT_VERSION=mysql-v1
+```
+
+`GET /health`는 DB 연결 상태와 함께 다음 배포 식별 정보를 반환합니다.
+
+```json
+{
+  "status": "ok",
+  "target_set_id": "lumi-market-1",
+  "service": "lumi-market",
+  "database_engine": "mysql",
+  "deployment_version": "mysql-v1"
+}
+```
+
+공개 Git용 진단 정의는 `configs/targets.lab-1.example.json`, 배포 Descriptor 예시는
+`configs/deployment-lumi-aws-mysql-v1.example.json`을 사용합니다. 실제 EC2 주소가 들어간
+Descriptor는 공개 저장소에 커밋하지 않고 허가된 비공개 채널로 전달합니다.
+
 MySQL volume까지 완전히 삭제하는 명령은 다음과 같습니다. 이 명령은 로컬 실습 데이터를
 모두 제거하므로 일반적인 반복 테스트에서는 사용하지 않습니다.
 

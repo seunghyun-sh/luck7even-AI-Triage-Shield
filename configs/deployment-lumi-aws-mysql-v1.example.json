@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "deployment_id": "lumi-aws-mysql-v1",
+  "display_name": "Lumi Market AWS MySQL v1",
+  "target_set_id": "lumi-market-1",
+  "service": "lumi-market",
+  "base_url": "http://<EC2_PUBLIC_IP>:5001",
+  "health_path": "/health",
+  "database_engine": "mysql",
+  "deployment_version": "mysql-v1",
+  "lifecycle": "ACTIVE"
+}

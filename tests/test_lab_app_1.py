@@ -16,6 +16,9 @@ def client(tmp_path: Path):
             "SECRET_KEY": "test-session-key-1",
             "LAB_1_RESET_TOKEN": "test-reset-token-1",
             "LAB_1_SECURITY_MODE": "vulnerable",
+            "LAB_1_TARGET_SET_ID": "lumi-market-1",
+            "LAB_1_SERVICE": "lumi-market",
+            "LAB_1_DEPLOYMENT_VERSION": "test-v1",
         }
     )
     return app.test_client()
@@ -31,6 +34,9 @@ def secure_client(tmp_path: Path):
             "SECRET_KEY": "test-session-key-1",
             "LAB_1_RESET_TOKEN": "test-reset-token-1",
             "LAB_1_SECURITY_MODE": "secure",
+            "LAB_1_TARGET_SET_ID": "lumi-market-1",
+            "LAB_1_SERVICE": "lumi-market",
+            "LAB_1_DEPLOYMENT_VERSION": "test-v1",
         }
     )
     return app.test_client()
@@ -39,7 +45,13 @@ def secure_client(tmp_path: Path):
 def test_health_endpoint(client) -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.get_json() == {"status": "ok"}
+    assert response.get_json() == {
+        "status": "ok",
+        "target_set_id": "lumi-market-1",
+        "service": "lumi-market",
+        "database_engine": "sqlite",
+        "deployment_version": "test-v1",
+    }
 
 
 @pytest.mark.parametrize(

@@ -29,6 +29,11 @@ def create_app(test_config: dict | None = None) -> Flask:
         DB_CONNECT_TIMEOUT=int(os.getenv("LAB_1_DB_CONNECT_TIMEOUT", "5")),
         SECRET_KEY=os.getenv("LAB_1_SECRET_KEY", "local-training-session-key-1"),
         LAB_1_RESET_TOKEN=os.getenv("LAB_1_RESET_TOKEN", ""),
+        LAB_1_TARGET_SET_ID=os.getenv("LAB_1_TARGET_SET_ID", "lumi-market-1"),
+        LAB_1_SERVICE=os.getenv("LAB_1_SERVICE", "lumi-market"),
+        LAB_1_DEPLOYMENT_VERSION=os.getenv(
+            "LAB_1_DEPLOYMENT_VERSION", "local-v1"
+        ),
         LAB_1_SECURITY_MODE=os.getenv(
             "LAB_1_SECURITY_MODE", "vulnerable"
         ).lower(),

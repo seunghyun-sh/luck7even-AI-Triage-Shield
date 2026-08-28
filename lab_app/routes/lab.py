@@ -11,11 +11,17 @@ lab_bp = Blueprint("lab", __name__)
 
 @lab_bp.get("/health")
 def health():
+    identity = {
+        "target_set_id": current_app.config["LAB_1_TARGET_SET_ID"],
+        "service": current_app.config["LAB_1_SERVICE"],
+        "database_engine": current_app.config["DB_ENGINE"],
+        "deployment_version": current_app.config["LAB_1_DEPLOYMENT_VERSION"],
+    }
     try:
         get_db().execute("SELECT 1").fetchone()
     except DATABASE_ERRORS:
-        return {"status": "error"}, 503
-    return {"status": "ok"}, 200
+        return {"status": "error", **identity}, 503
+    return {"status": "ok", **identity}, 200
 
 
 @lab_bp.post("/internal/lab-1/reset")
