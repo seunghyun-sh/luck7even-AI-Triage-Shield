@@ -116,7 +116,8 @@ class PipelineOrchestrator:
         status: RunStatusDocument | None = None
         try:
             status = self._store.create_run(request)
-            with self._store.pipeline_lock(status.scan_run_id):
+            with self._store.pipeline_lock(status.scan_run_id) as lock:
+                self._store.reconcile_orphaned_runs(lock)
                 if on_run_created is not None:
                     on_run_created(status.scan_run_id)
                 return self._run_locked(status, manifest)

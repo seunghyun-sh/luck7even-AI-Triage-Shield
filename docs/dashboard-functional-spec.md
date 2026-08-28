@@ -45,17 +45,18 @@ AI 판정과 Excel은 최종 보안 판정이나 프로젝트 결과보고서가
 - readiness는 명시적인 `준비 상태 확인/새로고침`으로만 실행한다. 선택 manifest 경로와 유형 fingerprint가 같은 결과만 사용하며, 입력 변경 뒤에는 다시 확인해야 한다.
 - readiness는 `준비 N · 차단 N`, 차단 항목 우선 compact row, 통과 항목 expander로 표시한다. 실행 직전에도 preflight를 다시 수행하며 READY가 아니면 launcher를 호출하지 않는다.
 - 실행 CTA 아래에는 우선순위에 따라 `유형 미선택`, `허가 미확인`, `준비 확인 필요`, `차단 해결`, `active run` 중 현재 비활성 사유를 한 줄로 표시한다.
-- ACTIVE (`QUEUED`, `RUNNING`)에서는 setup control을 숨기고 RunStore에서 재발견한 run ID, target set, 요청 유형, status, stage, progress, updated_at만 읽기 전용으로 표시한다. total이 0이면 `전체 건수 계산 중`으로 표시한다.
-- TERMINAL은 `COMPLETED`(green), `PARTIAL`(amber), `FAILED`(red)의 의미를 텍스트로 표시한다. 안전한 canonical processed artifact가 있는 COMPLETED에는 `이 결과 검토`, PARTIAL에는 `부분 결과 검토` CTA만 제공한다. CTA는 `scan_run_id`를 persistent review selection state에 저장하고 결과 검토 view로 이동한다.
+- ACTIVE (`QUEUED`, `RUNNING`)에서는 setup control을 숨기고 RunStore에서 재발견한 run ID, target set, 요청 유형, 상태(각각 `대기`, `실행 중`), stage, progress, updated_at만 읽기 전용으로 표시한다. total이 0이면 `전체 건수 계산 중`으로 표시한다.
+- TERMINAL은 `COMPLETED`(완료, green), `PARTIAL`(부분 완료, amber), `FAILED`(실패, red)의 의미를 텍스트로 표시한다. 안전한 canonical processed artifact가 있는 COMPLETED에는 `이 결과 검토`, PARTIAL에는 `부분 결과 검토` CTA만 제공한다. CTA는 `scan_run_id`를 persistent review selection state에 저장하고 결과 검토 view로 이동한다.
 - FAILED 또는 artifact unavailable에는 결과 검토 CTA가 없다. `새 진단 준비`는 session의 run selection만 정리하고 RunStore artifact는 삭제하지 않는다. 자동 결과 이동은 하지 않는다.
 - 결과 검토에 active run이 있으면 작은 banner와 `실행 상태 보기` CTA를 표시하되 hidden polling은 하지 않는다.
 
 ### 4.2 결과 선택·상태 헤더
 
-- 기본 completed 결과를 선택한다.
+- 자동 발견 결과는 `COMPLETED`를 먼저, `PARTIAL`을 다음으로 정렬하고 각 상태 그룹에서는 완료 시각 최신순으로 정렬한다. 따라서 더 최근의 PARTIAL이 있어도 기본값은 최신 COMPLETED다. terminal CTA가 저장한 명시적 `scan_run_id`는 PARTIAL이어도 이 기본값보다 우선한다.
+- 자동 발견 결과 선택지는 `scan_run_id`와 상태 표시어(완료 또는 부분 완료)를 함께 표시한다.
 - 테스트·시연 시 로컬 JSON을 업로드할 수 있다.
-- `scan_run_id`, `target_set_id`, 시작·완료 시각과 run status를 표시한다.
-- `PARTIAL`이면 결과가 불완전하다는 경고를 표시한다.
+- `scan_run_id`, `target_set_id`, 시작·완료 시각과 run 상태 표시어를 표시한다.
+- `PARTIAL`이면 부분 완료 경고와 함께 **필터 적용 전 전체 Finding 기준** 스캔 실패, AI 미요청, AI 실패, 수동 검토 필요 건수를 이 순서로 표시한다.
 - `FAILED`이면 오류만 표시하고 통계와 Excel 생성을 막는다.
 - AI 분석과 Excel이 담당자 검토용 초안임을 표시한다.
 
@@ -72,16 +73,28 @@ AI 판정과 Excel은 최종 보안 판정이나 프로젝트 결과보고서가
 
 카드는 검증된 데이터에서 pandas로 계산하며 LLM을 사용하지 않는다.
 
-### 4.4 검토 필터
+### 4.4 검토 필터와 표시어
 
-- 취약점 유형: 전체, XSS, SQLI
-- 규칙 판정: 전체, 취약 의심, 양호, scan 실패
+저장 JSON, 필터 반환 값, DataFrame 집계·평가·Excel은 canonical English enum을 그대로 사용한다. 화면 경계에서만 아래 표시어로 바꾼다. Finding/run ID와 오류 code는 번역하지 않는다.
+
+| canonical 값 | 화면 표시 |
+| --- | --- |
+| run `COMPLETED`, `PARTIAL`, `FAILED`, `QUEUED`, `RUNNING` | 완료, 부분 완료, 실패, 대기, 실행 중 |
+| scan `COMPLETED`, `FAILED` | 완료, 실패 |
+| rule `SUSPECTED`, `SAFE`, `SCAN_FAILED` | 취약 의심, 양호, 스캔 실패 |
+| AI status `COMPLETED`, `NOT_REQUESTED`, `FAILED` | 완료, 미요청, 실패 |
+| AI label `VULNERABLE`, `SAFE`, `INCONCLUSIVE`, `null` | 취약, 양호, 판정 불가, 미판정 |
+| AI 미요청 사유 `RULE_NOT_SUSPECTED`, `SCAN_FAILED`, `POLICY_EXCLUDED` | 규칙상 의심되지 않음, 스캔 실패, 정책 제외 |
+| vuln type `XSS`, `SQLI` | 크로스 사이트 스크립팅 (XSS), SQL 삽입 (SQLI) |
+
+- 취약점 유형: 전체, 크로스 사이트 스크립팅 (XSS), SQL 삽입 (SQLI)
+- 규칙 판정: 전체, 취약 의심, 양호, 스캔 실패
 - AI 상태: 전체, 완료, 미요청, 실패
-- AI 판정: 전체, 취약, 양호, 판정 불가
+- AI 판정: 전체, 취약, 양호, 판정 불가, 미판정
 - 수동 검토: 전체, 필요, 불필요
 - URL·`case_id`·`finding_id` 검색
 
-필터 변경 시 카드, 차트, 목록과 Excel에 같은 범위를 적용한다.
+각 sidebar option은 위 표시어로 보이지만 선택·반환 값은 canonical enum(또는 AI label의 `null`)이다. 필터 변경 시 canonical filtered DataFrame으로 카드, 차트, 목록과 Excel에 같은 범위를 적용한다.
 
 ### 4.5 차트
 
@@ -106,10 +119,9 @@ SQLi ground truth가 있으면 조건부 혼동행렬을 추가한다. 평균 co
 목록에는 다음 항목을 표시한다.
 
 - `finding_id`, `case_id`
-- 취약점 유형
+- 취약점 유형 표시어
 - URL과 파라미터
-- scan 상태와 규칙 판정
-- AI 상태와 AI 판정
+- scan 상태·규칙 판정과 AI 상태·AI 판정 표시어
 - confidence
 - 수동 검토 필요 여부
 
@@ -118,7 +130,7 @@ SQLi ground truth가 있으면 조건부 혼동행렬을 추가한다. 평균 co
 - 요청 URL, method, 입력 위치, 파라미터와 payload
 - HTTP status, 응답 시간과 기준 응답 시간
 - 규칙 판정, 규칙 근거와 원시 증거 요약
-- AI 상태, 판정과 confidence
+- AI 상태, 판정, 미요청 사유와 confidence
 - AI 분석 요약과 소스 증거
 - 예상 영향도와 조치 권고
 - 수동 확인 방법과 보고서 문장 초안

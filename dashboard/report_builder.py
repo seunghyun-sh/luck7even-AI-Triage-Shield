@@ -218,6 +218,10 @@ def build_excel_report(
         ("completed_at", _metadata_value(run_metadata, "completed_at")),
         ("필터 결과 건수", len(frame)),
         ("전체 Finding", dashboard_summary["total_findings"]),
+        ("스캔 완료", dashboard_summary["scan_completed"]),
+        ("스캔 실패", dashboard_summary["scan_failed"]),
+        ("AI 완료", dashboard_summary["ai_completed"]),
+        ("AI 미요청", dashboard_summary["ai_not_requested"]),
         ("AI 취약 판정", dashboard_summary["ai_vulnerable"]),
         ("AI 판정 불가", dashboard_summary["ai_inconclusive"]),
         ("AI 처리 실패", dashboard_summary["ai_failed"]),
@@ -225,12 +229,6 @@ def build_excel_report(
         ("규칙 취약 의심", dashboard_summary["rule_suspected"]),
     ]
     if evaluation:
-        summary_rows.extend(
-            [
-                ("평가 라벨 모수", evaluation.get("n_labeled")),
-                ("평가 채점 모수", evaluation.get("n_scored")),
-            ]
-        )
         summary_rows.extend(_flatten_evaluation(evaluation, "evaluation."))
     summary_data = [{"항목": key, "값": value} for key, value in summary_rows]
     _write_table(

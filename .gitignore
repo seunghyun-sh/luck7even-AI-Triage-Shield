@@ -17,7 +17,11 @@ venv/
 data/raw/*
 data/processed/*
 data/exports/*
+HEAD
 data/runs/*
+=======
+data/runs/
+origin/feature/dashboard-contracts
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/exports/.gitkeep
