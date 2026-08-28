@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "target_set_id": "lumi-market-1",
-  "base_url": "http://127.0.0.1:5001",
+  "base_url": "http://127.0.0.1:5000",
   "request_policy": {
     "timeout_seconds": 10,
     "follow_redirects": false
