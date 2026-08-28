@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any
+from urllib.parse import urlsplit
 
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from analysis.models import AiClaim, AiReference
 from dashboard.metrics import build_summary
 
 _DRAFT_WARNING = "AI 생성 검토용 초안이며 최종 확인이 필요함"
@@ -43,12 +47,20 @@ _DETAIL_COLUMNS = (
     ("scan_error", "스캔 오류"),
     ("ai_status", "AI 상태"),
     ("ai_status_reason", "AI 상태 사유"),
-    ("ai_label", "AI 판정"),
+    ("ai_label", "AI 보조 판정"),
     ("confidence", "AI 신뢰도"),
     ("needs_human_review", "수동 검토 필요"),
     ("assessment_summary", "AI 분석 요약"),
     ("source_evidence", "AI 소스 증거"),
     ("ai_error", "AI 오류"),
+    ("grounding_status", "근거 상태"),
+    ("provenance_model", "생성 모델"),
+    ("provenance_prompt_version", "프롬프트 버전"),
+    ("provenance_knowledge_base_version", "지식베이스 버전"),
+    ("provenance_output_schema_version", "출력 스키마 버전"),
+    ("provenance_retrieval_policy_version", "검색 정책 버전"),
+    ("provenance_generated_at", "생성 시각"),
+    ("ai_role", "AI 역할"),
 )
 _RECOMMENDATION_COLUMNS = (
     ("case_id", "케이스 ID"),
@@ -56,13 +68,20 @@ _RECOMMENDATION_COLUMNS = (
     ("vuln_type", "취약점 유형"),
     ("url", "URL"),
     ("ai_status", "AI 상태"),
-    ("ai_label", "AI 판정"),
+    ("ai_label", "AI 보조 판정"),
     ("needs_human_review", "수동 검토 필요"),
     ("impact", "예상 영향도"),
     ("recommendation", "조치 권고"),
     ("manual_check", "수동 확인 방법"),
     ("report_paragraph", "보고서 문장 초안"),
     ("ai_error", "AI 오류"),
+    ("grounding_status", "근거 상태"),
+    ("provenance_model", "생성 모델"),
+    ("provenance_prompt_version", "프롬프트 버전"),
+    ("provenance_knowledge_base_version", "지식베이스 버전"),
+    ("provenance_output_schema_version", "출력 스키마 버전"),
+    ("provenance_retrieval_policy_version", "검색 정책 버전"),
+    ("provenance_generated_at", "생성 시각"),
 )
 _COMPARISON_COLUMNS = (
     ("case_id", "케이스 ID"),
@@ -70,12 +89,25 @@ _COMPARISON_COLUMNS = (
     ("vuln_type", "취약점 유형"),
     ("rule_label", "규칙 판정"),
     ("ai_status", "AI 상태"),
-    ("ai_label", "AI 판정"),
+    ("ai_label", "AI 보조 판정"),
     ("ground_truth_label", "정답 판정"),
     ("rule_ai_match", "규칙-AI 일치"),
     ("evaluation_exclusion_reason", "평가 제외 사유"),
     ("needs_human_review", "수동 검토 필요"),
 )
+_OFFICIAL_REFERENCE_COLUMNS = (
+    ("finding_id", "finding_id"),
+    ("reference_id", "reference_id"),
+    ("publisher", "publisher"),
+    ("title", "title"),
+    ("version", "version"),
+    ("section", "section"),
+    ("canonical_url", "canonical_url"),
+    ("document_sha256", "document_sha256"),
+    ("source_id", "source_id"),
+    ("file_id", "file_id"),
+)
+_REFERENCE_ID_PATTERN = re.compile(r"^R[1-9][0-9]*$")
 _ILLEGAL_XML_C0 = frozenset(
     chr(code) for code in (*range(0x09), 0x0B, 0x0C, *range(0x0E, 0x20))
 )
@@ -88,9 +120,7 @@ def _safe_cell_value(value: Any) -> Any:
         return None
     if isinstance(value, str):
         escaped = "".join(
-            f"\\x{ord(character):02X}"
-            if character in _ILLEGAL_XML_C0
-            else character
+            f"\\x{ord(character):02X}" if character in _ILLEGAL_XML_C0 else character
             for character in value
         )
         return f"'{escaped}" if escaped.startswith(("=", "+", "-", "@")) else escaped
@@ -196,6 +226,94 @@ def _flatten_evaluation(
     return values
 
 
+def _official_reference_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Revalidate grounded references before labelling them official."""
+
+    references: list[dict[str, Any]] = []
+    for row in rows:
+        if row.get("grounding_status") != "GROUNDED":
+            continue
+        try:
+            parsed_references = json.loads(row.get("references_json", "[]"))
+            parsed_claims = json.loads(row.get("claims_json", "[]"))
+            retrieved_file_ids = json.loads(
+                row.get("provenance_retrieved_file_ids_json", "[]")
+            )
+            vector_store_ids = json.loads(
+                row.get("provenance_vector_store_ids_json", "[]")
+            )
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if (
+            not isinstance(parsed_references, list)
+            or not isinstance(parsed_claims, list)
+            or not isinstance(retrieved_file_ids, list)
+            or not isinstance(vector_store_ids, list)
+            or not vector_store_ids
+            or any(
+                not isinstance(value, str) or not value for value in retrieved_file_ids
+            )
+            or any(
+                not isinstance(value, str) or not value for value in vector_store_ids
+            )
+        ):
+            continue
+        try:
+            validated_references = [
+                AiReference.model_validate(reference) for reference in parsed_references
+            ]
+            validated_claims = [
+                AiClaim.model_validate(claim) for claim in parsed_claims
+            ]
+        except (TypeError, ValueError):
+            continue
+        reference_ids = [reference.reference_id for reference in validated_references]
+        claimed_reference_ids = {
+            reference_id
+            for claim in validated_claims
+            for reference_id in claim.reference_ids
+        }
+        if (
+            not validated_references
+            or len(reference_ids) != len(set(reference_ids))
+            or any(
+                not _REFERENCE_ID_PATTERN.fullmatch(value) for value in reference_ids
+            )
+            or claimed_reference_ids != set(reference_ids)
+            or any(
+                reference.file_id not in retrieved_file_ids
+                for reference in validated_references
+            )
+        ):
+            continue
+        if any(
+            not _publisher_matches_url(reference) for reference in validated_references
+        ):
+            continue
+        for reference in validated_references:
+            reference_data = reference.model_dump(mode="json")
+            references.append(
+                {
+                    "finding_id": row.get("finding_id"),
+                    **{
+                        key: reference_data.get(key)
+                        for key, _ in _OFFICIAL_REFERENCE_COLUMNS
+                        if key != "finding_id"
+                    },
+                }
+            )
+    return references
+
+
+def _publisher_matches_url(reference: AiReference) -> bool:
+    hostname = (urlsplit(reference.canonical_url).hostname or "").lower()
+    if reference.publisher == "OWASP":
+        return hostname == "owasp.org" or hostname.endswith(".owasp.org")
+    if reference.publisher == "KISA":
+        return hostname == "kisa.or.kr" or hostname.endswith(".kisa.or.kr")
+    return False
+
+
 def build_excel_report(
     df: pd.DataFrame,
     run_metadata: Mapping[str, Any] | Any,
@@ -222,11 +340,35 @@ def build_excel_report(
         ("스캔 실패", dashboard_summary["scan_failed"]),
         ("AI 완료", dashboard_summary["ai_completed"]),
         ("AI 미요청", dashboard_summary["ai_not_requested"]),
-        ("AI 취약 판정", dashboard_summary["ai_vulnerable"]),
-        ("AI 판정 불가", dashboard_summary["ai_inconclusive"]),
+        ("AI 보조 취약 판정", dashboard_summary["ai_vulnerable"]),
+        ("AI 보조 판정 불가", dashboard_summary["ai_inconclusive"]),
         ("AI 처리 실패", dashboard_summary["ai_failed"]),
         ("수동 검토 필요", dashboard_summary["needs_human_review"]),
         ("규칙 취약 의심", dashboard_summary["rule_suspected"]),
+        (
+            "GROUNDED",
+            int(
+                frame.get("grounding_status", pd.Series(dtype=object))
+                .eq("GROUNDED")
+                .sum()
+            ),
+        ),
+        (
+            "INSUFFICIENT",
+            int(
+                frame.get("grounding_status", pd.Series(dtype=object))
+                .eq("INSUFFICIENT")
+                .sum()
+            ),
+        ),
+        (
+            "NOT_APPLICABLE",
+            int(
+                frame.get("grounding_status", pd.Series(dtype=object))
+                .eq("NOT_APPLICABLE")
+                .sum()
+            ),
+        ),
     ]
     if evaluation:
         summary_rows.extend(_flatten_evaluation(evaluation, "evaluation."))
@@ -249,10 +391,14 @@ def build_excel_report(
             if comparison.get("scan_status") == "COMPLETED"
             and comparison.get("ai_status") == "COMPLETED"
             and (
-                (comparison.get("rule_label") == "SUSPECTED"
-                 and comparison.get("ai_label") == "VULNERABLE")
-                or (comparison.get("rule_label") == "SAFE"
-                    and comparison.get("ai_label") == "SAFE")
+                (
+                    comparison.get("rule_label") == "SUSPECTED"
+                    and comparison.get("ai_label") == "VULNERABLE"
+                )
+                or (
+                    comparison.get("rule_label") == "SAFE"
+                    and comparison.get("ai_label") == "SAFE"
+                )
             )
             else "불일치"
             if comparison.get("scan_status") == "COMPLETED"
@@ -264,6 +410,14 @@ def build_excel_report(
         comparison_rows.append(comparison)
     comparison = workbook.create_sheet("판정비교")
     _write_table(comparison, _COMPARISON_COLUMNS, comparison_rows, "판정 비교")
+
+    official_references = workbook.create_sheet("공식근거")
+    _write_table(
+        official_references,
+        _OFFICIAL_REFERENCE_COLUMNS,
+        _official_reference_rows(rows),
+        "공식 근거",
+    )
 
     buffer = BytesIO()
     workbook.save(buffer)

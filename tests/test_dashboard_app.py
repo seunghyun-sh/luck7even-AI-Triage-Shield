@@ -4,6 +4,7 @@ import json
 import shutil
 from contextlib import nullcontext
 from datetime import timedelta
+from io import StringIO
 from pathlib import Path
 
 import pandas as pd
@@ -23,6 +24,7 @@ from dashboard.app import (
     _processed_display_name,
     _render_charts,
     _report_frame,
+    _safe_official_url,
 )
 from dashboard.data_loader import (
     findings_to_dataframe,
@@ -509,8 +511,8 @@ def test_dashboard_distinguishes_zero_run_from_filter_reset() -> None:
 
         assert [(metric.label, metric.value) for metric in app.metric] == [
             ("전체 Finding", "0"),
-            ("AI 취약 판정", "0"),
-            ("AI 판정 불가", "0"),
+            ("AI 보조 취약 판정", "0"),
+            ("AI 보조 판정 불가", "0"),
             ("수동 검토 필요", "0"),
             ("AI 처리 실패", "0"),
             ("규칙 취약 의심", "0"),
@@ -605,6 +607,47 @@ def test_reviewer_enum_mapping_preserves_canonical_filter_and_aggregation_inputs
         _display_enum("ai_status_reason", "RULE_NOT_SUSPECTED")
         == "규칙상 의심되지 않음"
     )
+
+
+def test_findings_dataframe_flattens_evidence_and_legacy_defaults() -> None:
+    payload = json.loads(SAMPLE_PATH.read_text())
+    grounded = findings_to_dataframe(load_processed_data(SAMPLE_PATH)).iloc[0]
+
+    assert grounded["schema_version"] == "1.1"
+    assert grounded["grounding_status"] == "GROUNDED"
+    assert grounded["claim_count"] == 4
+    assert grounded["reference_count"] == 1
+    assert json.loads(grounded["claims_json"])[0]["claim_id"] == "C1"
+    assert json.loads(grounded["references_json"])[0]["reference_id"] == "R1"
+    assert grounded["provenance_model"] == "gpt-5"
+
+    payload["schema_version"] = "1.0"
+    payload["status"] = "COMPLETED"
+    payload["findings"] = [payload["findings"][0]]
+    payload["findings"][0]["ai"]["confidence"] = 0.5
+    for key in ("role", "grounding_status", "claims", "references", "provenance"):
+        payload["findings"][0]["ai"].pop(key, None)
+    legacy = findings_to_dataframe(
+        load_processed_data(StringIO(json.dumps(payload)))
+    ).iloc[0]
+
+    assert legacy["schema_version"] == "1.0"
+    assert legacy["ai_role"] is None
+    assert legacy["grounding_status"] is None
+    assert legacy["claim_count"] == 0
+    assert legacy["reference_count"] == 0
+    assert legacy["claims_json"] == "[]"
+    assert legacy["references_json"] == "[]"
+
+
+def test_dashboard_rechecks_official_link_allowlist() -> None:
+    assert _safe_official_url("https://owasp.org/www-project-top-ten/") == (
+        "https://owasp.org/www-project-top-ten/"
+    )
+    assert _safe_official_url("https://www.kisa.or.kr/") == "https://www.kisa.or.kr/"
+    assert _safe_official_url("http://owasp.org/") is None
+    assert _safe_official_url("https://owasp.org@unsafe.example/") is None
+    assert _safe_official_url("https://unsafe.example/") is None
 
 
 @pytest.mark.parametrize(

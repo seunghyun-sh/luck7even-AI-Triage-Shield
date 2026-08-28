@@ -1,3 +1,4 @@
+import json
 from io import BytesIO
 
 import pandas as pd
@@ -40,14 +41,20 @@ def test_excel_report_has_safe_review_sheets_and_round_trips() -> None:
     )
 
     workbook = load_workbook(BytesIO(report), data_only=False)
-    assert workbook.sheetnames == ["진단요약", "상세결과", "조치권고", "판정비교"]
+    assert workbook.sheetnames == [
+        "진단요약",
+        "상세결과",
+        "조치권고",
+        "판정비교",
+        "공식근거",
+    ]
     for worksheet in workbook.worksheets:
         assert worksheet["A2"].value == "AI 생성 검토용 초안이며 최종 확인이 필요함"
         assert worksheet.auto_filter.ref is not None
         assert worksheet.freeze_panes == "A5"
 
     detail = workbook["상세결과"]
-    assert detail.auto_filter.ref == "A4:Y5"
+    assert detail.auto_filter.ref == "A4:AG5"
     assert detail["E5"].value == "'=https://example.test/search"
     assert detail["I5"].value == "'+OR 1=1"
     assert detail["P5"].value == "'@evidence"
@@ -66,8 +73,14 @@ def test_excel_report_supports_an_empty_filtered_result() -> None:
     report = build_excel_report(pd.DataFrame(), {"scan_run_id": "empty-run"})
 
     workbook = load_workbook(BytesIO(report))
-    assert workbook.sheetnames == ["진단요약", "상세결과", "조치권고", "판정비교"]
-    assert workbook["상세결과"].auto_filter.ref == "A4:Y4"
+    assert workbook.sheetnames == [
+        "진단요약",
+        "상세결과",
+        "조치권고",
+        "판정비교",
+        "공식근거",
+    ]
+    assert workbook["상세결과"].auto_filter.ref == "A4:AG4"
 
 
 def test_excel_comparison_uses_semantic_rule_ai_matches() -> None:
@@ -117,7 +130,132 @@ def test_excel_comparison_uses_semantic_rule_ai_matches() -> None:
     ]
 
 
-def test_partial_report_summary_matches_dashboard_status_counts_and_evaluation() -> None:
+def test_excel_exports_official_references_and_grounding_counts() -> None:
+    findings = pd.DataFrame(
+        [
+            {
+                "finding_id": "finding-1",
+                "scan_status": "COMPLETED",
+                "rule_label": "SUSPECTED",
+                "ai_status": "COMPLETED",
+                "ai_label": "INCONCLUSIVE",
+                "needs_human_review": True,
+                "grounding_status": "GROUNDED",
+                "claims_json": json.dumps(
+                    [
+                        {
+                            "claim_id": "C1",
+                            "claim_type": "IMPACT",
+                            "text": "Impact",
+                            "evidence_ids": [],
+                            "reference_ids": ["R1"],
+                        }
+                    ]
+                ),
+                "references_json": json.dumps(
+                    [
+                        {
+                            "reference_id": "R1",
+                            "publisher": "OWASP",
+                            "title": "=Guide\x00",
+                            "version": "2026",
+                            "section": "A1",
+                            "canonical_url": "https://owasp.org/guide",
+                            "document_sha256": "a" * 64,
+                            "source_id": "source-1",
+                            "file_id": "file-1",
+                        }
+                    ]
+                ),
+                "provenance_vector_store_ids_json": '["vs-1"]',
+                "provenance_retrieved_file_ids_json": '["file-1"]',
+            },
+            {
+                "finding_id": "finding-2",
+                "scan_status": "COMPLETED",
+                "rule_label": "SUSPECTED",
+                "ai_status": "COMPLETED",
+                "ai_label": "INCONCLUSIVE",
+                "needs_human_review": True,
+                "grounding_status": "INSUFFICIENT",
+            },
+        ]
+    )
+    workbook = load_workbook(
+        BytesIO(build_excel_report(findings, {"scan_run_id": "run-1"})),
+        data_only=False,
+    )
+    references = workbook["공식근거"]
+    summary_rows = {
+        row[0]: row[1]
+        for row in workbook["진단요약"].iter_rows(min_row=5, values_only=True)
+        if row[0] is not None
+    }
+
+    assert references.max_row == 5
+    assert [references.cell(5, column).value for column in range(1, 11)] == [
+        "finding-1",
+        "R1",
+        "OWASP",
+        "'=Guide\\x00",
+        "2026",
+        "A1",
+        "https://owasp.org/guide",
+        "a" * 64,
+        "source-1",
+        "file-1",
+    ]
+    assert summary_rows["GROUNDED"] == 1
+    assert summary_rows["INSUFFICIENT"] == 1
+    assert summary_rows["NOT_APPLICABLE"] == 0
+
+
+def test_excel_rejects_forged_or_unbound_official_references() -> None:
+    findings = pd.DataFrame(
+        [
+            {
+                "finding_id": "forged",
+                "scan_status": "COMPLETED",
+                "rule_label": "SUSPECTED",
+                "ai_status": "COMPLETED",
+                "ai_label": "INCONCLUSIVE",
+                "needs_human_review": True,
+                "grounding_status": "GROUNDED",
+                "claims_json": (
+                    '[{"claim_id":"C1","claim_type":"IMPACT","text":"x",'
+                    '"evidence_ids":[],"reference_ids":["R1"]}]'
+                ),
+                "references_json": json.dumps(
+                    [
+                        {
+                            "reference_id": "R1",
+                            "publisher": "OWASP",
+                            "title": "Forged",
+                            "version": "1",
+                            "section": "A",
+                            "canonical_url": "https://unsafe.example/guide",
+                            "document_sha256": "a" * 64,
+                            "source_id": "forged",
+                            "file_id": "file-forged",
+                        }
+                    ]
+                ),
+                "provenance_vector_store_ids_json": '["vs-1"]',
+                "provenance_retrieved_file_ids_json": '["file-forged"]',
+            }
+        ]
+    )
+
+    workbook = load_workbook(
+        BytesIO(build_excel_report(findings, {"scan_run_id": "run-1"}))
+    )
+
+    assert workbook["공식근거"].max_row == 4
+
+
+def test_partial_report_summary_matches_dashboard_status_counts_and_evaluation() -> (
+    None
+):
     findings = pd.DataFrame(
         [
             {
@@ -197,8 +335,8 @@ def test_partial_report_summary_matches_dashboard_status_counts_and_evaluation()
         "스캔 실패": summary_rows["스캔 실패"],
         "AI 완료": summary_rows["AI 완료"],
         "AI 미요청": summary_rows["AI 미요청"],
-        "AI 취약 판정": summary_rows["AI 취약 판정"],
-        "AI 판정 불가": summary_rows["AI 판정 불가"],
+        "AI 보조 취약 판정": summary_rows["AI 보조 취약 판정"],
+        "AI 보조 판정 불가": summary_rows["AI 보조 판정 불가"],
         "AI 처리 실패": summary_rows["AI 처리 실패"],
         "수동 검토 필요": summary_rows["수동 검토 필요"],
         "규칙 취약 의심": summary_rows["규칙 취약 의심"],
@@ -208,8 +346,8 @@ def test_partial_report_summary_matches_dashboard_status_counts_and_evaluation()
         "스캔 실패": dashboard_summary["scan_failed"],
         "AI 완료": dashboard_summary["ai_completed"],
         "AI 미요청": dashboard_summary["ai_not_requested"],
-        "AI 취약 판정": dashboard_summary["ai_vulnerable"],
-        "AI 판정 불가": dashboard_summary["ai_inconclusive"],
+        "AI 보조 취약 판정": dashboard_summary["ai_vulnerable"],
+        "AI 보조 판정 불가": dashboard_summary["ai_inconclusive"],
         "AI 처리 실패": dashboard_summary["ai_failed"],
         "수동 검토 필요": dashboard_summary["needs_human_review"],
         "규칙 취약 의심": dashboard_summary["rule_suspected"],

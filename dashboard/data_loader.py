@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import BinaryIO, TextIO, TypeAlias
 
@@ -72,8 +73,14 @@ def _display_error(error: ErrorDetail | None) -> str | None:
 def findings_to_dataframe(run: ProcessedRun) -> pd.DataFrame:
     """Flatten validated findings into the dashboard's non-canonical UI representation."""
 
+    def json_value(value: object) -> str:
+        return json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+
     rows = [
         {
+            "schema_version": run.schema_version,
             "scan_run_id": run.scan_run_id,
             "target_set_id": run.target_set_id,
             "case_id": finding.case_id,
@@ -109,10 +116,62 @@ def findings_to_dataframe(run: ProcessedRun) -> pd.DataFrame:
             "manual_check": finding.ai.manual_check,
             "report_paragraph": finding.ai.report_paragraph,
             "ai_error": _display_error(finding.ai.error),
+            "ai_role": finding.ai.role.value if finding.ai.role else None,
+            "grounding_status": (
+                finding.ai.grounding_status.value
+                if finding.ai.grounding_status
+                else None
+            ),
+            "claim_count": len(finding.ai.claims),
+            "reference_count": len(finding.ai.references),
+            "claims_json": json_value(
+                [claim.model_dump(mode="json") for claim in finding.ai.claims]
+            ),
+            "references_json": json_value(
+                [
+                    reference.model_dump(mode="json")
+                    for reference in finding.ai.references
+                ]
+            ),
+            "provenance_model": (
+                finding.ai.provenance.model if finding.ai.provenance else None
+            ),
+            "provenance_prompt_version": (
+                finding.ai.provenance.prompt_version if finding.ai.provenance else None
+            ),
+            "provenance_knowledge_base_version": (
+                finding.ai.provenance.knowledge_base_version
+                if finding.ai.provenance
+                else None
+            ),
+            "provenance_output_schema_version": (
+                finding.ai.provenance.output_schema_version
+                if finding.ai.provenance
+                else None
+            ),
+            "provenance_retrieval_policy_version": (
+                finding.ai.provenance.retrieval_policy_version
+                if finding.ai.provenance
+                else None
+            ),
+            "provenance_generated_at": (
+                finding.ai.provenance.generated_at.isoformat()
+                if finding.ai.provenance
+                else None
+            ),
+            "provenance_vector_store_ids_json": json_value(
+                finding.ai.provenance.vector_store_ids if finding.ai.provenance else []
+            ),
+            "provenance_retrieved_file_ids_json": json_value(
+                finding.ai.provenance.retrieved_file_ids
+                if finding.ai.provenance
+                else []
+            ),
         }
         for finding in run.findings
     ]
     columns = [
+        "schema_version",
         "scan_run_id",
         "target_set_id",
         "case_id",
@@ -144,5 +203,19 @@ def findings_to_dataframe(run: ProcessedRun) -> pd.DataFrame:
         "manual_check",
         "report_paragraph",
         "ai_error",
+        "ai_role",
+        "grounding_status",
+        "claim_count",
+        "reference_count",
+        "claims_json",
+        "references_json",
+        "provenance_model",
+        "provenance_prompt_version",
+        "provenance_knowledge_base_version",
+        "provenance_output_schema_version",
+        "provenance_retrieval_policy_version",
+        "provenance_generated_at",
+        "provenance_vector_store_ids_json",
+        "provenance_retrieved_file_ids_json",
     ]
     return pd.DataFrame(rows, columns=columns)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -127,6 +128,43 @@ def _display_rule_verdict(value: Any) -> str:
     return _display_enum("scan_status", value)
 
 
+def _safe_official_url(value: Any) -> str | None:
+    """Return only direct HTTPS OWASP/KISA URLs safe to offer as dashboard links."""
+
+    if not isinstance(value, str):
+        return None
+    parsed = urlsplit(value)
+    hostname = parsed.hostname
+    if (
+        parsed.scheme != "https"
+        or hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or not (
+            hostname in {"owasp.org", "kisa.or.kr"}
+            or hostname.endswith((".owasp.org", ".kisa.or.kr"))
+        )
+    ):
+        return None
+    return value
+
+
+def _json_list(value: Any) -> list[dict[str, Any]]:
+    """Read flattened contract JSON defensively for the reviewer display."""
+
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return (
+        [item for item in parsed if isinstance(item, dict)]
+        if isinstance(parsed, list)
+        else []
+    )
+
+
 def _format_metric(value: Any) -> str:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return "N/A"
@@ -203,7 +241,7 @@ def _apply_filters(df: pd.DataFrame) -> pd.DataFrame:
 
     ai_values = filtered["ai_label"]
     selected_labels = st.sidebar.multiselect(
-        "AI 판정",
+        "AI 보조 판정",
         ["VULNERABLE", "SAFE", "INCONCLUSIVE", None],
         default=["VULNERABLE", "SAFE", "INCONCLUSIVE", None],
         key="filter_ai_labels",
@@ -312,7 +350,7 @@ def _render_charts(df: pd.DataFrame) -> None:
             )
     with middle:
         if verdict_counts.empty:
-            st.info("완료된 AI 판정이 없습니다.")
+            st.info("완료된 AI 보조 판정이 없습니다.")
         else:
             label = _count_label_column(verdict_counts)
             displayed_counts = verdict_counts.assign(
@@ -326,13 +364,13 @@ def _render_charts(df: pd.DataFrame) -> None:
                         values="count",
                         hole=0.55,
                     ),
-                    "AI 판정 결과 분포",
+                    "AI 보조 판정 결과 분포",
                 ),
                 width="stretch",
             )
     with right:
         if comparison.empty:
-            st.info("비교할 규칙·AI 판정이 없습니다.")
+            st.info("비교할 규칙·AI 보조 판정이 없습니다.")
         else:
             displayed_comparison = comparison.assign(
                 rule_label=comparison["rule_label"].map(_display_rule_verdict),
@@ -347,7 +385,7 @@ def _render_charts(df: pd.DataFrame) -> None:
                         color="ai_label",
                         barmode="group",
                     ),
-                    "규칙 판정과 AI 판정 비교",
+                    "규칙 판정과 AI 보조 판정 비교",
                 ),
                 width="stretch",
             )
@@ -426,9 +464,11 @@ def _render_detail(df: pd.DataFrame) -> None:
     with ai_tab:
         st.write(
             f"AI 상태: **{_display_enum('ai_status', finding['ai_status'])}** · "
-            f"판정: **{_display_enum('ai_label', finding['ai_label'])}** · "
+            f"AI 보조 판정: **{_display_enum('ai_label', finding['ai_label'])}** · "
             f"Confidence: **{_text(finding['confidence'])}**"
         )
+        grounding_status = _text(finding.get("grounding_status"))
+        st.markdown(f":blue-badge[근거 상태: {grounding_status}]")
         if pd.notna(finding["ai_status_reason"]):
             st.info(
                 "미요청 사유: "
@@ -442,7 +482,81 @@ def _render_detail(df: pd.DataFrame) -> None:
         ):
             st.caption(label)
             st.code(_text(finding[column]), language="text")
+        if finding.get("grounding_status") == "INSUFFICIENT":
+            st.warning("공식 근거 부족")
+        elif finding.get("grounding_status") == "GROUNDED":
+            claims = _json_list(finding.get("claims_json"))
+            references = _json_list(finding.get("references_json"))
+            for claim_type in (
+                "OBSERVATION",
+                "IMPACT",
+                "RECOMMENDATION",
+                "MANUAL_CHECK",
+            ):
+                typed_claims = [
+                    claim for claim in claims if claim.get("claim_type") == claim_type
+                ]
+                if not typed_claims:
+                    continue
+                st.caption(claim_type)
+                for claim in typed_claims:
+                    details = [
+                        f"{claim.get('claim_id', 'C?')}: {claim.get('text', '')}"
+                    ]
+                    evidence_ids = claim.get("evidence_ids") or []
+                    reference_ids = claim.get("reference_ids") or []
+                    if evidence_ids:
+                        details.append(
+                            f"로컬 증거: {', '.join(map(str, evidence_ids))}"
+                        )
+                    if reference_ids:
+                        details.append(
+                            f"공식 근거: {', '.join(map(str, reference_ids))}"
+                        )
+                    st.code("\n".join(details), language="text")
+            st.caption("공식 근거")
+            for reference in references:
+                st.write(
+                    " · ".join(
+                        _text(reference.get(key))
+                        for key in (
+                            "reference_id",
+                            "publisher",
+                            "title",
+                            "version",
+                            "section",
+                        )
+                    )
+                )
+                canonical_url = reference.get("canonical_url")
+                safe_url = _safe_official_url(canonical_url)
+                if safe_url:
+                    st.link_button(
+                        safe_url,
+                        safe_url,
+                        key=f"reference-{selected_id}-{reference.get('reference_id')}",
+                    )
+                else:
+                    st.caption(f"Canonical URL: {_text(canonical_url)}")
+            st.caption("생성 이력")
+            st.code(
+                "\n".join(
+                    f"{label}: {_text(finding.get(column))}"
+                    for label, column in (
+                        ("model", "provenance_model"),
+                        ("prompt", "provenance_prompt_version"),
+                        ("KB", "provenance_knowledge_base_version"),
+                        ("schema", "provenance_output_schema_version"),
+                        ("retrieval policy", "provenance_retrieval_policy_version"),
+                        ("generated_at", "provenance_generated_at"),
+                    )
+                ),
+                language="text",
+            )
     with recommendation_tab:
+        if finding.get("grounding_status") == "INSUFFICIENT":
+            st.warning("공식 근거 부족: 보고서 초안을 표시하지 않습니다.")
+            return
         for label, column in (
             ("예상 영향도", "impact"),
             ("조치 권고", "recommendation"),
@@ -1011,8 +1125,10 @@ def _render_review_tab() -> None:
     metadata = _run_metadata(run)
     st.title("Triage Shield · 취약점 검토 관제")
     st.caption(
-        "AI 분석과 Excel은 검토용 초안입니다. 최종 확인·수정·승인은 담당자가 수행해야 합니다."
+        "AI 생성 검토용 초안과 Excel은 검토용 초안입니다. 최종 확인·수정·승인은 담당자가 수행해야 합니다."
     )
+    if run.schema_version == "1.0":
+        st.warning("출처 없는 기존 AI 초안")
     header, status = st.columns([5, 1])
     header.text(
         f"Run {metadata['scan_run_id']} · Target {metadata['target_set_id']} · "
@@ -1061,8 +1177,8 @@ def _render_review_tab() -> None:
     summary = build_summary(filtered)
     card_specs = [
         ("전체 Finding", "total_findings"),
-        ("AI 취약 판정", "ai_vulnerable"),
-        ("AI 판정 불가", "ai_inconclusive"),
+        ("AI 보조 취약 판정", "ai_vulnerable"),
+        ("AI 보조 판정 불가", "ai_inconclusive"),
         ("수동 검토 필요", "needs_human_review"),
         ("AI 처리 실패", "ai_failed"),
         ("규칙 취약 의심", "rule_suspected"),
