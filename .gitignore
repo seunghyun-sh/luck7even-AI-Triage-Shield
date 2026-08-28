@@ -17,6 +17,7 @@ venv/
 data/raw/*
 data/processed/*
 data/exports/*
+data/runs/
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/exports/.gitkeep
