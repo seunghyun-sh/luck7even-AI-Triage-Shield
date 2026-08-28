@@ -401,9 +401,10 @@ data/processed/<scan_run_id>/results.json
   교집합이 private KB manifest와 일치할 때만 검색 passage를 허용한다.
   별도 `responses.parse` 호출이 이 제한된 passage에서 구조화 claim을 만들며
   모델이 반환한 출처 metadata는 사용하지 않는다.
-- AI 보조 판정은 항상 `INCONCLUSIVE`, `confidence=null`,
-  `needs_human_review=true`다. `INSUFFICIENT`는 claim·reference·권고·보고서
-  문장을 포함하지 않는다.
+- `GROUNDED` AI 보조 분류는 `VULNERABLE`, `SAFE`, `INCONCLUSIVE`와
+  confidence를 생성할 수 있지만 `needs_human_review=true`를 유지하며 최종
+  승인을 의미하지 않는다. `INSUFFICIENT`는 `INCONCLUSIVE`, confidence null이고
+  claim·reference·권고·보고서 문장을 포함하지 않는다.
 - processed 검증과 게시 완료 후에만 `status.processed_result_path`를 기록한다.
 
 ### 12.3 원자적 게시

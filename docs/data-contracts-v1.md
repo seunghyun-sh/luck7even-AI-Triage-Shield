@@ -288,9 +288,10 @@ raw envelope의 식별·시각·상태 필드를 유지한다. `findings`는 raw
 
 `schema_version=1.1`의 모든 Finding은
 `ai.role=EVIDENCE_GROUNDED_REPORTING`이어야 한다. 이 role의 AI는 최종
-취약·안전 판정을 하지 않는다. 따라서 완료 결과의 `label`은 항상
-`INCONCLUSIVE`, `confidence=null`, `needs_human_review=true`다. ground truth는
-AI 입력, 모델 출력, ProcessedRun에 포함하지 않는다.
+승인자가 아니라 2차 보조 분류기다. `GROUNDED` 결과는 `VULNERABLE`, `SAFE`,
+`INCONCLUSIVE`와 `0.0..1.0` confidence를 생성할 수 있지만
+`needs_human_review=true`를 유지한다. ground truth는 AI 입력, 모델 출력,
+ProcessedRun에 포함하지 않는다.
 
 `claims`는 `claim_id`, `claim_type`, `text`, `evidence_ids`, `reference_ids`로
 구성한다. `claim_id`는 Finding 안에서 유일하고 비어 있지 않으며,
@@ -313,7 +314,7 @@ allowlist 도메인 URL이어야 한다.
 
 | AI 상태와 grounding 상태 | 필수 불변 조건 |
 | --- | --- |
-| `COMPLETED` + `GROUNDED` | `status_reason/error=null`, 모든 생성 문장 nonblank, claims와 references가 각각 하나 이상, provenance 필수 |
+| `COMPLETED` + `GROUNDED` | `label=VULNERABLE/SAFE/INCONCLUSIVE`, confidence 필수, human review 필수, `status_reason/error=null`, 모든 생성 문장 nonblank, claims와 references가 각각 하나 이상, provenance 필수 |
 | `COMPLETED` + `INSUFFICIENT` | `status_reason=POLICY_EXCLUDED`, `assessment_summary`만 nonblank, `impact/recommendation/manual_check/report_paragraph=null`, references 비어 있음, provenance 필수 |
 | `NOT_REQUESTED` + `NOT_APPLICABLE` | 기존 NOT_REQUESTED 규칙을 따르고 claims, references, provenance가 없음 |
 | `FAILED` + `NOT_APPLICABLE` | 생성 문장, claims, references가 없고 안전한 `error`가 필수; provenance는 허용 |

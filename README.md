@@ -136,7 +136,7 @@ RawRun 1.0
   → ProcessedRun 1.1
 ```
 
-AI는 최종 취약·안전 판정을 내리지 않고 항상 `INCONCLUSIVE` 보조 의견과 사람 검토 필요 상태를 생성합니다. 실제 검색 결과·citation·manifest가 일치할 때만 `GROUNDED` 보고서 초안을 만들며, 공식 근거가 부족하면 `INSUFFICIENT`로 기록하고 권고·보고서 문장을 생성하지 않습니다.
+AI는 최종 승인자가 아니라 2차 보조 분류기입니다. 실제 검색 결과·citation·manifest가 일치하는 `GROUNDED` 결과에서만 `VULNERABLE`, `SAFE`, `INCONCLUSIVE`와 confidence를 생성하며, 모든 결과는 사람 검토가 필요합니다. 공식 근거가 부족하면 `INSUFFICIENT`·`INCONCLUSIVE`로 기록하고 권고·보고서 문장을 생성하지 않습니다.
 
 ### 3. 실습 웹앱 실행
 

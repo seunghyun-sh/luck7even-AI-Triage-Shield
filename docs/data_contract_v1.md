@@ -19,7 +19,7 @@
 
 - 형식: JSON
 - Contract A의 데이터에 아래 필드를 추가하여 전달:
-  - `ai_label` (String): AI 최종 판정 결과
+  - `ai_label` (String): AI 2차 보조 분류 결과
   - `confidence` (String): AI 판정 신뢰도
   - `evidence_summary` (String): AI의 판정 사유 및 근거 텍스트
   - `recommendation` (String): 취약점 조치 및 방어 권고 방안

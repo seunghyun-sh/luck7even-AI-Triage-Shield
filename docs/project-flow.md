@@ -211,7 +211,9 @@ OpenAI·데이터 처리 담당은 다음 순서로 처리한다.
 7. 앱이 C#/R#와 참조 metadata를 부여하고 생성 문장에 E#/R#를 조립한다. 모델의 metadata는 사용하지 않는다.
 8. 검색·인용이 없으면 `INSUFFICIENT/POLICY_EXCLUDED`로 완료하며, 후보가 아닌 항목을 포함한 모든 raw Finding을 processed 결과에 1:1 보존한다.
 
-AI는 최종 취약/안전 판정을 생성하지 않는다. `GROUNDED` 결과도 `INCONCLUSIVE`, confidence `null`, human review 필수이며, 다음 근거 기반 claim만 생성한다.
+AI는 최종 승인자가 아니라 2차 보조 분류기다. `GROUNDED` 결과는
+`VULNERABLE`, `SAFE`, `INCONCLUSIVE`와 confidence를 생성할 수 있지만 human
+review는 항상 필수이며, 다음 근거 기반 claim을 함께 생성한다.
 
 - 판정 label과 confidence
 - 수동 검토 필요 여부
