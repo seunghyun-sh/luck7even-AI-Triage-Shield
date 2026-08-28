@@ -1,0 +1,46 @@
+{
+  "schema_version": "1.0",
+  "target_set_id": "lumi-market-1",
+  "base_url": "http://127.0.0.1:5001",
+  "request_policy": {
+    "timeout_seconds": 10,
+    "follow_redirects": false
+  },
+  "targets": [
+    {
+      "case_id": "lumi-search-reflected",
+      "vuln_type": "XSS",
+      "path": "/search",
+      "method": "GET",
+      "input": {
+        "location": "query",
+        "parameters": { "q": "baseline" },
+        "attack_parameter": "q"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "xss-v1",
+      "manual_verification_profile": "xss-reflection"
+    },
+    {
+      "case_id": "lumi-reviews-stored",
+      "vuln_type": "XSS",
+      "path": "/reviews",
+      "method": "POST",
+      "input": {
+        "location": "form",
+        "parameters": {
+          "author": "tester",
+          "title": "review title",
+          "content": "baseline content",
+          "rating": "5"
+        },
+        "attack_parameter": "content"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "xss-v1",
+      "manual_verification_profile": "xss-stored"
+    }
+  ]
+}

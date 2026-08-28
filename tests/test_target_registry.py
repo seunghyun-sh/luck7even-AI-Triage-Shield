@@ -36,8 +36,13 @@ def _write_registry(tmp_path: Path, *, base_url: str, manifest: str) -> Path:
 def test_default_registry_resolves_authorized_manifest() -> None:
     targets = list_registered_targets()
 
-    assert [target.target_set_id for target in targets] == ["local-lab-v1"]
-    assert load_registered_target("local-lab-v1") == targets[0].manifest
+    assert [target.target_set_id for target in targets] == [
+        "local-lab-v1",
+        "lumi-market-1",
+        "novastream-2",
+    ]
+    for target in targets:
+        assert load_registered_target(target.target_set_id) == target.manifest
 
 
 def test_registry_rejects_manifest_outside_config_directory(tmp_path: Path) -> None:

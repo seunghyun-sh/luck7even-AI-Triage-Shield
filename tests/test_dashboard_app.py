@@ -139,7 +139,7 @@ def test_execution_setup_requires_explicit_preflight_and_shows_blockers() -> Non
     _button(app, "준비 상태 확인/새로고침").click().run(timeout=30)
 
     assert any("준비 " in markdown.value and "차단 " in markdown.value for markdown in app.markdown)
-    assert any("XSS 스캐너를 사용할 수 없습니다." in caption.value for caption in app.caption)
+    assert any("AI triage를 사용할 수 없습니다." in caption.value for caption in app.caption)
     assert _button(app, "진단 실행 시작").disabled
 
 
