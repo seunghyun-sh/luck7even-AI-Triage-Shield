@@ -10,6 +10,8 @@ def make_client(tmp_path):
             "TESTING": True,
             "DATABASE_URL": f"sqlite:///{db_path}",
             "SECRET_KEY": "test-only",
+            "TARGET_SET_ID": "novastream-2",
+            "DEPLOYMENT_VERSION": "sqlite-v1",
         }
     )
     return app.test_client()
@@ -18,7 +20,13 @@ def make_client(tmp_path):
 def test_health_endpoint(tmp_path):
     response = make_client(tmp_path).get("/health")
     assert response.status_code == 200
-    assert response.get_json() == {"service": "novastream", "status": "ok"}
+    assert response.get_json() == {
+        "status": "ok",
+        "target_set_id": "novastream-2",
+        "service": "novastream",
+        "database_engine": "sqlite",
+        "deployment_version": "sqlite-v1",
+    }
 
 
 def test_home_shows_seeded_catalog(tmp_path):

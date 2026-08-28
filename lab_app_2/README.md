@@ -26,6 +26,19 @@
 | 운영자 리뷰 검토 | `GET /admin/reviews` | Stored XSS 실행 지점 |
 | 상태 확인 | `GET /health` | 스캐너 헬스 체크 |
 
+`/health`는 대시보드의 Deployment Descriptor 검증을 위해 서비스와 배포환경
+식별 정보도 반환합니다. DB 엔진은 실제 `LAB2_DATABASE_URL`에서 자동 판별합니다.
+
+```json
+{
+  "status": "ok",
+  "target_set_id": "novastream-2",
+  "service": "novastream",
+  "database_engine": "mysql",
+  "deployment_version": "mysql-v1"
+}
+```
+
 일반 콘텐츠 상세 화면은 리뷰를 HTML escape하지만 운영자 검토 화면은 교육
 목적으로 의도적으로 escape하지 않습니다.
 

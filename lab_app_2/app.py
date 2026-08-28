@@ -28,9 +28,16 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.config.from_mapping(
         DATABASE_URL=os.getenv("LAB2_DATABASE_URL", "sqlite:///lab_app_2/novastream.db"),
         SECRET_KEY=os.getenv("LAB2_SECRET_KEY", "novastream-local-lab-only"),
+        TARGET_SET_ID=os.getenv("LAB2_TARGET_SET_ID", "novastream-2"),
+        DEPLOYMENT_VERSION=os.getenv("LAB2_DEPLOYMENT_VERSION"),
     )
     if test_config:
         app.config.update(test_config)
+
+    database_engine = app.config["DATABASE_URL"].split(":", 1)[0].split("+", 1)[0]
+    app.config["DATABASE_ENGINE"] = database_engine
+    if not app.config["DEPLOYMENT_VERSION"]:
+        app.config["DEPLOYMENT_VERSION"] = f"{database_engine}-v1"
 
     database = Database(app.config["DATABASE_URL"])
     database.initialize()
@@ -165,7 +172,13 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     @app.get("/health")
     def health():
-        return {"service": "novastream", "status": "ok"}
+        return {
+            "status": "ok",
+            "target_set_id": app.config["TARGET_SET_ID"],
+            "service": "novastream",
+            "database_engine": app.config["DATABASE_ENGINE"],
+            "deployment_version": app.config["DEPLOYMENT_VERSION"],
+        }
 
     return app
 
