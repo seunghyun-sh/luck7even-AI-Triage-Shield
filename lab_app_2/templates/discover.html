@@ -17,8 +17,8 @@
     {% if query %}
       <section class="discovery-result">
         <span>추천 키워드</span>
-        <!-- INTENTIONALLY VULNERABLE: reflected XSS scanner target. -->
-        <h2 id="reflected-result">{{ query | safe }}</h2>
+        <!-- INTENTIONALLY WEAK: one-pass "script" removal, then raw rendering. -->
+        <h2 id="reflected-result">{{ filtered_query | safe }}</h2>
         <p>이 키워드를 바탕으로 큐레이션을 준비하고 있습니다.</p>
       </section>
     {% endif %}

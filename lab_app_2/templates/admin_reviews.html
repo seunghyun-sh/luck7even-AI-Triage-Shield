@@ -24,7 +24,7 @@
               <td>#{{ review.id }}</td>
               <td>{{ review.title_name }}</td>
               <td>{{ review.nickname }}</td>
-              <!-- INTENTIONALLY VULNERABLE: stored XSS scanner target. -->
+              <!-- INTENTIONALLY WEAK: filtered once on input, rendered raw here. -->
               <td class="stored-review">{{ review.body | safe }}</td>
               <td><span class="status-pill">{{ review.status }}</span></td>
             </tr>
