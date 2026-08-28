@@ -235,12 +235,13 @@ def evaluate_boolean_pair_payload(
         return _failed_finding(case_id, request, "SCAN_REQUEST_FAILED", "대상 요청을 완료하지 못했습니다.")
 
     diff_ratio = _response_diff_ratio(true_resp.text, false_resp.text)
-    if diff_ratio > BOOLEAN_DIFF_THRESHOLD:
-        label = RuleLabel.SUSPECTED
-        reason = f"참/거짓 페이로드 응답이 {diff_ratio:.0%} 다름(Boolean-based 의심)"
+    exact_mismatch = true_resp.text.strip() != false_resp.text.strip()
+    if diff_ratio > BOOLEAN_DIFF_THRESHOLD or (exact_mismatch and len(true_resp.text) < 500):
+         label = RuleLabel.SUSPECTED
+         reason = f"참/거짓 페이로드 응답이 서로 다름(Boolean-based 의심, 길이차 {diff_ratio:.0%})"
     else:
-        label = RuleLabel.SAFE
-        reason = f"참/거짓 페이로드 응답이 비슷함(Boolean-based 신호 없음, 차이 {diff_ratio:.1%})"
+         label = RuleLabel.SAFE
+         reason = f"참/거짓 페이로드 응답이 비슷함(Boolean-based 신호 없음, 차이 {diff_ratio:.1%})"
 
     finding_id = _new_finding_id()
     html_path = _save_response_html(responses_dir, finding_id, true_resp.text)

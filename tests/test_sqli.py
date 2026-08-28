@@ -83,3 +83,23 @@ def test_evaluate_boolean_pair_detects_difference(monkeypatch, tmp_path):
     )
 
     assert finding.scan.rule.label.value == "SUSPECTED"
+
+def test_evaluate_boolean_pair_detects_short_json_content_mismatch(monkeypatch, tmp_path):
+    """/products/stock처럼 길이 차이는 작지만 내용이 다른 JSON 응답도 잡아야 한다."""
+    target = _make_target()
+
+    def fake_get(url, params=None, timeout=None, allow_redirects=None):
+        payload = params.get("id", "")
+        if "1=1" in payload:
+            return FakeResponse('{"available":true,"status":"in_stock"}', 200)
+        return FakeResponse('{"available":false,"status":"unavailable"}', 200)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    finding = detectors.evaluate_boolean_pair_payload(
+        target, "boolean-pair-1", "1 AND 1=1", "1 AND 1=2",
+        base_url="http://fake", timeout_seconds=10, follow_redirects=False,
+        responses_dir=tmp_path,
+    )
+
+    assert finding.scan.rule.label.value == "SUSPECTED"
