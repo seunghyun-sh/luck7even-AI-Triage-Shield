@@ -28,10 +28,11 @@ from analysis.models import (
 )
 
 DB_ERROR_KEYWORDS = [
-    "you have an error in your sql syntax",
-    "warning: mysql",
-    "unknown column",
-    "sql syntax",
+    "you have an error in your sql syntax", "warning: mysql", "unknown column", "sql syntax",
+    "sqlite3.operationalerror", "sqlite3.programmingerror", "sqlite3.integrityerror",
+    "sqlite3.error", "syntax error", "unrecognized token", "no such table", "no such column",
+    "you can only execute one statement at a time",
+    "(sqlite3.operationalerror)", "(sqlite3.programmingerror)", "sqlalche.me/e/",
 ]
 
 RESPONSE_DIFF_THRESHOLD = 0.5

