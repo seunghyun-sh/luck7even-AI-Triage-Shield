@@ -337,6 +337,16 @@ class AiProvenance(ContractModel):
     retrieval_policy_version: str = Field(min_length=1)
     vector_store_ids: list[str] = Field(default_factory=list)
     retrieved_file_ids: list[str] = Field(default_factory=list)
+    retrieval_mode: (
+        Literal[
+            "REVIEWED_PACK",
+            "REVIEWED_PACK_PLUS_VERIFIED_CACHE",
+            "REVIEWED_PACK_PLUS_LOCAL_SEARCH",
+        ]
+        | None
+    ) = None
+    grounding_bundle_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    grounding_pack_version: str | None = Field(default=None, min_length=1)
     generated_at: datetime
 
     @field_validator("vector_store_ids", "retrieved_file_ids")
@@ -345,6 +355,22 @@ class AiProvenance(ContractModel):
         if any(not identifier for identifier in value) or len(value) != len(set(value)):
             raise ValueError("provenance identifiers must be nonblank and unique")
         return value
+
+    @model_validator(mode="after")
+    def validate_grounding_bundle_fields(self) -> Self:
+        fields = (
+            self.retrieval_mode,
+            self.grounding_bundle_digest,
+            self.grounding_pack_version,
+        )
+        if any(value is None for value in fields) and any(
+            value is not None for value in fields
+        ):
+            raise ValueError(
+                "retrieval_mode, grounding_bundle_digest, and grounding_pack_version "
+                "must be all present or all absent"
+            )
+        return self
 
     @field_validator("generated_at", mode="before")
     @classmethod
@@ -529,7 +555,10 @@ class AiResult(ContractModel):
                 if self.provenance is None:
                     raise ValueError("evidence AI result requires provenance")
                 if (
-                    not self.provenance.vector_store_ids
+                    (
+                        self.provenance.retrieval_mode is None
+                        and not self.provenance.vector_store_ids
+                    )
                     or not self.provenance.retrieved_file_ids
                     or any(
                         reference.file_id not in set(self.provenance.retrieved_file_ids)

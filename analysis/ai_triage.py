@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import re
 import sqlite3
 import time
+import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -29,6 +29,11 @@ from openai import (
 )
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from analysis.grounding import (
+    GroundingBundle,
+    GroundingUnavailableError,
+    resolve_grounding,
+)
 from analysis.knowledge_base import (
     KnowledgeBaseError,
     KnowledgeBaseManifest,
@@ -54,28 +59,23 @@ from analysis.models import (
     RuleLabel,
     RunStatus,
     ScanStatus,
-    VulnType,
 )
 from analysis.prompts import (
     PROMPT_VERSION,
     batch_triage_input,
-    retrieval_input,
-    retrieval_instructions,
     triage_instructions,
 )
 
 OUTPUT_SCHEMA_VERSION = "1.1"
-RETRIEVAL_POLICY_VERSION = "retrieval-v2-family-batch"
+RETRIEVAL_POLICY_VERSION = "hybrid-reviewed-v1"
 _PROVIDER_TIMEOUT_SECONDS = 30.0
 _RETRY_BUDGET_SECONDS = 70.0
 _CACHE_TIMEOUT_SECONDS = 5
 _LEASE_SECONDS = 90
 _TRUNCATION_MARKER = "[TRUNCATED]"
-_FIELD_JSON_BYTE_CAPS = {"E1": 1024, "E2": 1024, "E3": 512, "E4": 1536}
-_RETRIEVED_TEXT_FILE_BYTE_CAP = 768
-_RETRIEVED_TEXT_TOTAL_BYTE_CAP = 1024
-_BATCH_SIZE = 8
-_SYNTHESIS_CONCURRENCY = 2
+_FIELD_JSON_BYTE_CAPS = {"E1": 384, "E2": 512, "E3": 256, "E4": 768}
+_BATCH_SIZE = 16
+_SYNTHESIS_CONCURRENCY = 3
 ProgressCallback = Callable[[int, int, str | None], None]
 _REDACTIONS = (
     (re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"), "[EMAIL_REDACTED]"),
@@ -115,39 +115,24 @@ class ProviderObservation(BaseModel):
     evidence_ids: list[str] = Field(min_length=1)
 
 
-class ProviderReferenceClaim(BaseModel):
+class CompactFindingAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    text: str = Field(min_length=1)
-    reference_file_ids: list[str] = Field(min_length=1)
-
-
-class ProviderAnalysis(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    finding_id: str = Field(min_length=1)
     label: AiLabel
     confidence: float = Field(ge=0.0, le=1.0)
     observation: ProviderObservation
-    impact: ProviderReferenceClaim
-    recommendation: ProviderReferenceClaim
-    manual_check: ProviderReferenceClaim
+    guidance_ids: list[str] = Field(min_length=1, max_length=3)
 
 
-class ProviderFindingAnalysis(ProviderAnalysis):
-    finding_id: str = Field(min_length=1)
-
-
-class ProviderBatchAnalysis(BaseModel):
+class CompactBatchAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    findings: list[ProviderFindingAnalysis] = Field(
-        min_length=1, max_length=_BATCH_SIZE
-    )
+    findings: list[CompactFindingAnalysis] = Field(min_length=1, max_length=_BATCH_SIZE)
 
 
 @dataclass(frozen=True)
-class GroupRetrieval:
+class GroupGrounding:
     vuln_type: str
-    contexts: tuple[dict[str, object], ...]
-    retrieved: frozenset[str]
-    cited: frozenset[str]
+    bundle: GroundingBundle
 
 
 class ProviderSchemaError(ValueError):
@@ -244,9 +229,8 @@ def _evidence(finding: RawFinding) -> dict[str, str]:
         else str(response.baseline_elapsed_ms)
     )
     first_stage_observation = (
-        "The first-stage XSS rule selected this finding for independent second-stage review."
-        if finding.vuln_type is VulnType.XSS
-        else _redact(finding.scan.rule.reason)
+        f"The first-stage {finding.vuln_type.value} rule selected this finding "
+        "for independent second-stage review."
     )
     values = {
         "E1": first_stage_observation,
@@ -267,8 +251,10 @@ def check_readiness() -> None:
     if not os.environ.get("OPENAI_API_KEY") or not os.environ.get("AI_TRIAGE_MODEL"):
         raise RuntimeError("AI triage configuration is unavailable.")
     try:
-        load_knowledge_base()
-    except KnowledgeBaseError:
+        manifest = load_knowledge_base()
+        resolve_grounding("XSS", manifest)
+        resolve_grounding("SQLI", manifest)
+    except (GroundingUnavailableError, KnowledgeBaseError):
         raise RuntimeError("AI triage knowledge base is unavailable.") from None
 
 
@@ -416,6 +402,7 @@ def _cache_bindings(
     model: str,
     manifest: KnowledgeBaseManifest,
     vuln_type: str,
+    bundle: GroundingBundle,
 ) -> dict[str, Any]:
     return {
         "model": model,
@@ -426,6 +413,9 @@ def _cache_bindings(
         "retrieval_policy_version": RETRIEVAL_POLICY_VERSION,
         "vuln_type": vuln_type,
         "evidence_hash": _canonical_digest(evidence),
+        "retrieval_mode": bundle.mode.value,
+        "grounding_bundle_digest": bundle.bundle_digest,
+        "grounding_pack_version": bundle.pack_version,
     }
 
 
@@ -434,11 +424,14 @@ def _cache_key(
     evidence: dict[str, str],
     model: str,
     manifest: KnowledgeBaseManifest,
+    bundle: GroundingBundle,
 ) -> str:
     return _canonical_digest(
         {
             "finding": finding.model_dump(mode="json"),
-            **_cache_bindings(evidence, model, manifest, finding.vuln_type.value),
+            **_cache_bindings(
+                evidence, model, manifest, finding.vuln_type.value, bundle
+            ),
         }
     )
 
@@ -484,7 +477,7 @@ def _failed(code: str, retryable: bool) -> AiResult:
 
 
 def _provenance(
-    model: str, manifest: KnowledgeBaseManifest, retrieved: list[str], now: Any
+    model: str, manifest: KnowledgeBaseManifest, bundle: GroundingBundle, now: Any
 ) -> AiProvenance:
     timestamp = now() if callable(now) else now
     if timestamp.tzinfo is None or timestamp.utcoffset() is None:
@@ -495,14 +488,17 @@ def _provenance(
         knowledge_base_version=manifest.knowledge_base_version,
         output_schema_version=OUTPUT_SCHEMA_VERSION,
         retrieval_policy_version=RETRIEVAL_POLICY_VERSION,
-        vector_store_ids=manifest.vector_store_ids,
-        retrieved_file_ids=retrieved,
+        vector_store_ids=[],
+        retrieved_file_ids=list(bundle.retrieved_file_ids),
+        retrieval_mode=bundle.mode.value,
+        grounding_bundle_digest=bundle.bundle_digest,
+        grounding_pack_version=bundle.pack_version,
         generated_at=timestamp,
     )
 
 
 def _insufficient(
-    model: str, manifest: KnowledgeBaseManifest, retrieved: list[str], now: Any
+    model: str, manifest: KnowledgeBaseManifest, bundle: GroundingBundle, now: Any
 ) -> AiResult:
     return AiResult(
         status=AiStatus.COMPLETED,
@@ -519,7 +515,7 @@ def _insufficient(
         error=None,
         role=AiRole.EVIDENCE_GROUNDED_REPORTING,
         grounding_status=GroundingStatus.INSUFFICIENT,
-        provenance=_provenance(model, manifest, retrieved, now),
+        provenance=_provenance(model, manifest, bundle, now),
     )
 
 
@@ -527,77 +523,6 @@ def _get(value: Any, name: str, default: Any = None) -> Any:
     return getattr(
         value, name, value.get(name, default) if isinstance(value, dict) else default
     )
-
-
-def _extract_retrieval(response: Any) -> tuple[list[dict[str, object]], set[str]]:
-    retrieved, cited = [], set()
-    outputs = _get(response, "output", []) or []
-    calls = [item for item in outputs if _get(item, "type") == "file_search_call"]
-    if (
-        _get(response, "status") != "completed"
-        or len(calls) != 1
-        or _get(calls[0], "status") != "completed"
-    ):
-        raise ProviderToolError
-    for result in _get(calls[0], "results", []) or []:
-        file_id = _get(result, "file_id")
-        text, filename, score = (
-            _get(result, "text"),
-            _get(result, "filename"),
-            _get(result, "score"),
-        )
-        if (
-            not isinstance(file_id, str)
-            or not file_id
-            or not isinstance(text, str)
-            or not text
-            or not isinstance(filename, str)
-            or not filename
-            or not isinstance(score, (int, float))
-            or isinstance(score, bool)
-            or not math.isfinite(score)
-        ):
-            raise ProviderToolError
-
-    def annotations(items: Any) -> None:
-        for annotation in items or []:
-            citation = _get(annotation, "file_citation")
-            file_id = _get(citation, "file_id") or _get(annotation, "file_id")
-            if file_id:
-                cited.add(file_id)
-
-    for output in outputs:
-        if _get(output, "type") == "message":
-            for content in _get(output, "content", []) or []:
-                if _get(content, "type") == "output_text":
-                    annotations(_get(content, "annotations", []))
-    results = _get(calls[0], "results", []) or []
-    if not results:
-        return [], cited
-    if not cited:
-        raise ProviderToolError
-    remaining = _RETRIEVED_TEXT_TOTAL_BYTE_CAP
-    for result in results:
-        if remaining <= 0:
-            break
-        if _get(result, "file_id") not in cited:
-            continue
-        text = _truncate_utf8(
-            _get(result, "text"), min(_RETRIEVED_TEXT_FILE_BYTE_CAP, remaining)
-        )
-        encoded = len(text.encode("utf-8"))
-        if not text:
-            continue
-        retrieved.append(
-            {
-                "file_id": _get(result, "file_id"),
-                "filename": _get(result, "filename"),
-                "score": _get(result, "score"),
-                "text": text,
-            }
-        )
-        remaining -= encoded
-    return retrieved, cited
 
 
 def _status_retryable(error: APIStatusError) -> bool:
@@ -615,36 +540,19 @@ def _retry_after(error: Exception) -> float | None:
 
 
 def _grounded(
-    parsed: ProviderFindingAnalysis | None,
-    retrieved: set[str],
-    cited: set[str],
+    parsed: CompactFindingAnalysis,
+    bundle: GroundingBundle,
     evidence: dict[str, str],
     vuln_type: str,
     model: str,
     manifest: KnowledgeBaseManifest,
     now: Any,
 ) -> AiResult:
-    trusted = retrieved & cited
     sources = source_map_by_file_id(manifest)
-    if any(
-        fid not in sources or vuln_type not in sources[fid].vuln_types
-        for fid in retrieved
+    if len(parsed.guidance_ids) != len(set(parsed.guidance_ids)) or any(
+        guidance_id not in bundle.guidance for guidance_id in parsed.guidance_ids
     ):
-        raise ReferenceMismatchError
-    if not retrieved:
-        return _insufficient(model, manifest, [], now)
-    if parsed is None:
-        return _insufficient(model, manifest, sorted(retrieved), now)
-    provider_claims = (
-        parsed.impact,
-        parsed.recommendation,
-        parsed.manual_check,
-    )
-    claimed = {fid for claim in provider_claims for fid in claim.reference_file_ids}
-    if claimed - trusted:
-        raise ReferenceMismatchError
-    if not trusted:
-        return _insufficient(model, manifest, sorted(retrieved), now)
+        raise ProviderSchemaError
     prefix = f"{parsed.finding_id}:"
     if any(
         not evidence_id.startswith(prefix)
@@ -654,13 +562,25 @@ def _grounded(
         raise ProviderSchemaError
     if len(parsed.observation.evidence_ids) != len(
         set(parsed.observation.evidence_ids)
-    ) or any(
-        len(claim.reference_file_ids) != len(set(claim.reference_file_ids))
-        for claim in provider_claims
     ):
         raise ProviderSchemaError
     refs, ref_ids = [], {}
-    for index, fid in enumerate(sorted(claimed), 1):
+    selected = [bundle.guidance[key] for key in parsed.guidance_ids]
+    if any(guide.family != vuln_type for guide in selected):
+        raise ProviderSchemaError
+    source_ids = {source_id for guide in selected for source_id in guide.source_ids}
+    for index, fid in enumerate(
+        sorted(
+            fid
+            for fid, source in sources.items()
+            if (
+                source.source_id in source_ids
+                and fid in bundle.retrieved_file_ids
+                and vuln_type in source.vuln_types
+            )
+        ),
+        1,
+    ):
         source, ref_id = sources[fid], f"R{index}"
         ref_ids[fid] = ref_id
         refs.append(
@@ -676,6 +596,8 @@ def _grounded(
                 document_sha256=source.document_sha256,
             )
         )
+    if not refs or {sources[fid].source_id for fid in ref_ids} != source_ids:
+        raise ReferenceMismatchError
     claims = [
         AiClaim(
             claim_id="C1",
@@ -688,27 +610,26 @@ def _grounded(
             reference_ids=[],
         )
     ]
-    claims.extend(
-        AiClaim(
-            claim_id=f"C{index}",
-            claim_type=claim_type,
-            text=_redact(claim.text),
-            evidence_ids=[],
-            reference_ids=[ref_ids[fid] for fid in claim.reference_file_ids],
+    for claim_id, claim_type, field in (
+        ("C2", AiClaimType.IMPACT, "impact"),
+        ("C3", AiClaimType.RECOMMENDATION, "recommendation"),
+        ("C4", AiClaimType.MANUAL_CHECK, "manual_check"),
+    ):
+        texts = [_redact(getattr(guide, field)) for guide in selected]
+        ids = {source_id for guide in selected for source_id in guide.source_ids}
+        claims.append(
+            AiClaim(
+                claim_id=claim_id,
+                claim_type=claim_type,
+                text=" ".join(texts),
+                evidence_ids=[],
+                reference_ids=[
+                    ref_id
+                    for fid, ref_id in ref_ids.items()
+                    if sources[fid].source_id in ids
+                ],
+            )
         )
-        for index, (claim_type, claim) in enumerate(
-            zip(
-                (
-                    AiClaimType.IMPACT,
-                    AiClaimType.RECOMMENDATION,
-                    AiClaimType.MANUAL_CHECK,
-                ),
-                provider_claims,
-                strict=True,
-            ),
-            2,
-        )
-    )
 
     def text(kind: AiClaimType) -> str:
         return " ".join(
@@ -735,89 +656,18 @@ def _grounded(
         grounding_status=GroundingStatus.GROUNDED,
         claims=claims,
         references=refs,
-        provenance=_provenance(model, manifest, sorted(retrieved), now),
+        provenance=_provenance(model, manifest, bundle, now),
     )
-
-
-def _retrieval(
-    client: Any,
-    vuln_type: str,
-    manifest: KnowledgeBaseManifest,
-    sleeper: Any,
-    *,
-    monotonic: Any,
-    jitter: Any,
-    retry_budget: float,
-) -> GroupRetrieval:
-    model, deadline = _configured_model(), monotonic() + retry_budget
-    for attempt in range(3):
-        try:
-            remaining = deadline - monotonic()
-            if remaining <= 0:
-                raise ProviderDeadlineError
-            response = client.responses.create(
-                model=model,
-                instructions=retrieval_instructions(vuln_type),
-                input=retrieval_input(vuln_type),
-                tools=[
-                    {
-                        "type": "file_search",
-                        "vector_store_ids": manifest.vector_store_ids,
-                        "max_num_results": 5,
-                    }
-                ],
-                tool_choice="required",
-                include=["file_search_call.results"],
-                max_output_tokens=1200,
-                max_tool_calls=1,
-                timeout=min(_PROVIDER_TIMEOUT_SECONDS, remaining),
-            )
-            contexts, cited = _extract_retrieval(response)
-            retrieved = {item["file_id"] for item in contexts}
-            if not retrieved:
-                return GroupRetrieval(vuln_type, (), frozenset(), frozenset(cited))
-            sources = source_map_by_file_id(manifest)
-            if cited - retrieved or any(
-                fid not in sources or vuln_type not in sources[fid].vuln_types
-                for fid in retrieved
-            ):
-                raise ReferenceMismatchError
-            return GroupRetrieval(
-                vuln_type, tuple(contexts), frozenset(retrieved), frozenset(cited)
-            )
-        except (ReferenceMismatchError, ProviderToolError, ValidationError):
-            raise
-        except (
-            APITimeoutError,
-            RateLimitError,
-            APIConnectionError,
-            APIStatusError,
-        ) as error:
-            if isinstance(error, APIStatusError) and not _status_retryable(error):
-                raise
-            if attempt == 2:
-                raise
-            delay = _retry_after(error) or min(
-                10.0, 2**attempt + max(0.0, float(jitter()))
-            )
-            if monotonic() + delay > deadline:
-                raise ProviderDeadlineError from None
-            sleeper(delay)
-        except OpenAIError as error:
-            raise ProviderToolError from error
-        except (AttributeError, KeyError, TypeError, ValueError) as error:
-            raise ProviderToolError from error
-    raise AssertionError("unreachable")
 
 
 def _batch_parse(
     client: Any,
     model: str,
-    group: GroupRetrieval,
+    group: GroupGrounding,
     items: list[tuple[RawFinding, dict[str, str]]],
     *,
     timeout: float,
-) -> ProviderBatchAnalysis:
+) -> CompactBatchAnalysis:
     payload = [
         {
             "finding_id": finding.finding_id,
@@ -829,7 +679,22 @@ def _batch_parse(
     ]
     try:
         provider_input = batch_triage_input(
-            group.vuln_type, payload, list(group.contexts)
+            group.vuln_type,
+            payload,
+            {
+                "passages": [
+                    item.model_dump(mode="json") for item in group.bundle.passages
+                ],
+                "guidance": {
+                    key: {
+                        "description": (
+                            f"impact: {value.impact}; recommendation: "
+                            f"{value.recommendation}; manual_check: {value.manual_check}"
+                        )
+                    }
+                    for key, value in sorted(group.bundle.guidance.items())
+                },
+            },
         )
     except ValueError as error:
         raise ProviderSchemaError from error
@@ -837,15 +702,15 @@ def _batch_parse(
         model=model,
         instructions=triage_instructions(group.vuln_type),
         input=provider_input,
-        text_format=ProviderBatchAnalysis,
-        max_output_tokens=9600,
+        text_format=CompactBatchAnalysis,
+        max_output_tokens=6000,
         timeout=timeout,
     )
     if _get(response, "status") != "completed":
         raise ProviderToolError
     parsed = _get(response, "output_parsed")
-    if not isinstance(parsed, ProviderBatchAnalysis):
-        parsed = ProviderBatchAnalysis.model_validate(parsed)
+    if not isinstance(parsed, CompactBatchAnalysis):
+        parsed = CompactBatchAnalysis.model_validate(parsed)
     expected = {finding.finding_id for finding, _ in items}
     actual = [item.finding_id for item in parsed.findings]
     if len(actual) != len(set(actual)) or set(actual) != expected:
@@ -901,11 +766,14 @@ def _cached_result(
             "knowledge_base_version",
             "output_schema_version",
             "retrieval_policy_version",
+            "retrieval_mode",
+            "grounding_bundle_digest",
+            "grounding_pack_version",
         ):
             if getattr(provenance, key) != bindings[key]:
                 return None
         if (
-            provenance.vector_store_ids != manifest.vector_store_ids
+            provenance.vector_store_ids != []
             or row.get("trusted_file_ids") != provenance.retrieved_file_ids
         ):
             return None
@@ -977,13 +845,24 @@ def triage(
             )
 
     pending: dict[str, tuple[RawFinding, dict[str, str], str, dict[str, Any], Any]] = {}
+    bundles: dict[str, GroundingBundle] = {}
     if candidates:
         try:
             _load_environment()
             if manifest is None:
-                check_readiness()
                 manifest = load_knowledge_base()
             model = _configured_model()
+            for vuln_type in {finding.vuln_type.value for finding in candidates}:
+                try:
+                    on_progress(completed, total, f"검증 근거 준비 · {vuln_type}")
+                    bundles[vuln_type] = resolve_grounding(vuln_type, manifest)
+                except GroundingUnavailableError:
+                    for finding in candidates:
+                        if finding.vuln_type.value == vuln_type:
+                            terminal[finding.finding_id] = _failed(
+                                "AI_GROUNDING_UNAVAILABLE", False
+                            )
+                            completed += 1
             active_cache = cache
             if active_cache is None:
                 try:
@@ -992,10 +871,13 @@ def triage(
                 except (OSError, RuntimeError, sqlite3.Error):
                     active_cache = None
             for finding in candidates:
+                if finding.finding_id in terminal:
+                    continue
                 evidence = _evidence(finding)
-                key = _cache_key(finding, evidence, model, manifest)
+                bundle = bundles[finding.vuln_type.value]
+                key = _cache_key(finding, evidence, model, manifest, bundle)
                 bindings = _cache_bindings(
-                    evidence, model, manifest, finding.vuln_type.value
+                    evidence, model, manifest, finding.vuln_type.value, bundle
                 )
                 row = (
                     _cache_get(active_cache, key) if active_cache is not None else None
@@ -1036,45 +918,13 @@ def triage(
     groups: dict[str, list[tuple[RawFinding, dict[str, str]]]] = {}
     for finding, evidence, *_ in pending.values():
         groups.setdefault(finding.vuln_type.value, []).append((finding, evidence))
-    retrievals: dict[str, GroupRetrieval] = {}
     if pending and client is None:
         client = OpenAI(max_retries=0, timeout=_PROVIDER_TIMEOUT_SECONDS)
-    for vuln_type, items in groups.items():
-        try:
-            on_progress(completed, total, f"공식 근거 검색 · {vuln_type}")
-            retrievals[vuln_type] = _retrieval(
-                client,
-                vuln_type,
-                manifest,
-                sleeper,
-                monotonic=monotonic,
-                jitter=jitter,
-                retry_budget=retry_budget,
-            )
-            if not retrievals[vuln_type].retrieved:
-                for finding, _ in items:
-                    terminal[finding.finding_id] = _insufficient(
-                        model, manifest, [], now
-                    )
-                    completed += 1
-                on_progress(completed, total, f"AI 처리 완료 · {completed}/{total}")
-                groups[vuln_type] = []
-        except (
-            ReferenceMismatchError,
-            ProviderToolError,
-            ValidationError,
-            OpenAIError,
-            ProviderDeadlineError,
-        ) as error:
-            for finding, _ in items:
-                terminal[finding.finding_id] = _error_result(error)
-                completed += 1
-            on_progress(completed, total, f"AI 처리 완료 · {completed}/{total}")
 
     breaker_lock, breaker = Lock(), {"consecutive": 0, "open": False}
 
     def synthesize(
-        group: GroupRetrieval, items: list[tuple[RawFinding, dict[str, str]]]
+        group: GroupGrounding, items: list[tuple[RawFinding, dict[str, str]]]
     ) -> dict[str, AiResult]:
         with breaker_lock:
             if breaker["open"]:
@@ -1083,99 +933,196 @@ def triage(
                     for finding, _ in items
                 }
         deadline = monotonic() + retry_budget
-        for attempt in range(3):
-            try:
+        batch_data = [pending[finding.finding_id] for finding, _ in items]
+        lease_cache = batch_data[0][4] if batch_data else None
+        acquire = getattr(lease_cache, "acquire", None)
+        release = getattr(lease_cache, "release", None)
+        lease_owner: str | None = None
+        lease_key: str | None = None
+
+        if callable(acquire) and callable(release):
+            lease_key = _canonical_digest(
+                {
+                    "cache_keys": sorted(data[2] for data in batch_data),
+                    "model": model,
+                    "bundle_digest": group.bundle.bundle_digest,
+                }
+            )
+            owner = uuid.uuid4().hex
+            while monotonic() < deadline:
+                try:
+                    if acquire(lease_key, owner):
+                        lease_owner = owner
+                        cached_results: dict[str, AiResult] = {}
+                        for data in batch_data:
+                            row = _cache_get(data[4], data[2])
+                            cached = (
+                                _cached_result(row, data[3], manifest)
+                                if row is not None
+                                else None
+                            )
+                            if cached is None:
+                                cached_results = {}
+                                break
+                            cached_results[data[0].finding_id] = cached
+                        if cached_results:
+                            try:
+                                release(lease_key, owner)
+                            except (
+                                OSError,
+                                RuntimeError,
+                                sqlite3.Error,
+                                TypeError,
+                            ):
+                                pass
+                            lease_owner = None
+                            return cached_results
+                        break
+                except (OSError, RuntimeError, sqlite3.Error, TypeError):
+                    # A cache fault must not prevent a valid provider response.
+                    lease_key = None
+                    break
+
+                cached_results: dict[str, AiResult] = {}
+                for data in batch_data:
+                    row = _cache_get(data[4], data[2])
+                    cached = (
+                        _cached_result(row, data[3], manifest)
+                        if row is not None
+                        else None
+                    )
+                    if row is not None and cached is None:
+                        _cache_delete(data[4], data[2])
+                    if cached is None:
+                        cached_results = {}
+                        break
+                    cached_results[data[0].finding_id] = cached
+                if cached_results:
+                    return cached_results
+
                 remaining = deadline - monotonic()
                 if remaining <= 0:
-                    raise ProviderDeadlineError
-                parsed = _batch_parse(
-                    client,
-                    model,
-                    group,
-                    items,
-                    timeout=min(_PROVIDER_TIMEOUT_SECONDS, remaining),
-                )
-                with breaker_lock:
-                    breaker["consecutive"] = 0
-                by_id = {item.finding_id: item for item in parsed.findings}
-                results = {}
-                for finding, evidence in items:
-                    try:
-                        results[finding.finding_id] = _grounded(
-                            by_id[finding.finding_id],
-                            set(group.retrieved),
-                            set(group.cited),
-                            evidence,
-                            group.vuln_type,
-                            model,
-                            manifest,
-                            now,
-                        )
-                    except (
-                        ProviderSchemaError,
-                        ReferenceMismatchError,
-                        ValidationError,
-                    ) as error:
-                        results[finding.finding_id] = _error_result(error)
-                return results
-            except (
-                ProviderSchemaError,
-                ReferenceMismatchError,
-                ValidationError,
-            ) as error:
+                    break
+                sleeper(min(0.1, remaining))
+
+            if lease_key is not None and lease_owner is None:
                 return {
-                    finding.finding_id: _error_result(error) for finding, _ in items
+                    finding.finding_id: _failed("AI_PROVIDER_UNAVAILABLE", True)
+                    for finding, _ in items
                 }
-            except (
-                APITimeoutError,
-                RateLimitError,
-                APIConnectionError,
-                APIStatusError,
-                ProviderDeadlineError,
-            ) as error:
-                transient = not isinstance(error, APIStatusError) or _status_retryable(
-                    error
-                )
-                if not transient:
+
+        try:
+            for attempt in range(3):
+                try:
+                    remaining = deadline - monotonic()
+                    if remaining <= 0:
+                        raise ProviderDeadlineError
+                    parsed = _batch_parse(
+                        client,
+                        model,
+                        group,
+                        items,
+                        timeout=min(_PROVIDER_TIMEOUT_SECONDS, remaining),
+                    )
+                    with breaker_lock:
+                        breaker["consecutive"] = 0
+                    by_id = {item.finding_id: item for item in parsed.findings}
+                    results = {}
+                    for finding, evidence in items:
+                        try:
+                            results[finding.finding_id] = _grounded(
+                                by_id[finding.finding_id],
+                                group.bundle,
+                                evidence,
+                                group.vuln_type,
+                                model,
+                                manifest,
+                                now,
+                            )
+                        except (
+                            ProviderSchemaError,
+                            ReferenceMismatchError,
+                            ValidationError,
+                        ) as error:
+                            results[finding.finding_id] = _error_result(error)
+                    if lease_owner is not None:
+                        for finding_id, ai in results.items():
+                            data = pending[finding_id]
+                            if (
+                                ai.status is AiStatus.COMPLETED
+                                and ai.grounding_status
+                                in {
+                                    GroundingStatus.GROUNDED,
+                                    GroundingStatus.INSUFFICIENT,
+                                }
+                            ):
+                                _cache_set(
+                                    data[4], data[2], _cache_envelope(ai, data[3])
+                                )
+                    return results
+                except (
+                    ProviderSchemaError,
+                    ReferenceMismatchError,
+                    ValidationError,
+                ) as error:
                     return {
                         finding.finding_id: _error_result(error) for finding, _ in items
                     }
-                if attempt < 2:
-                    delay = _retry_after(error) or min(
-                        10.0, 2**attempt + max(0.0, float(jitter()))
-                    )
-                    if monotonic() + delay > deadline:
-                        error = ProviderDeadlineError()
-                        attempt = 2
-                    else:
-                        sleeper(delay)
-                        continue
-                with breaker_lock:
-                    breaker["consecutive"] += 1
-                    if breaker["consecutive"] >= 3:
-                        breaker["open"] = True
-                return {
-                    finding.finding_id: _error_result(error) for finding, _ in items
-                }
-            except (
-                ProviderToolError,
-                OpenAIError,
-                AttributeError,
-                KeyError,
-                TypeError,
-                ValueError,
-            ) as error:
-                return {
-                    finding.finding_id: _error_result(error) for finding, _ in items
-                }
-        raise AssertionError("unreachable")
+                except (
+                    APITimeoutError,
+                    RateLimitError,
+                    APIConnectionError,
+                    APIStatusError,
+                    ProviderDeadlineError,
+                ) as error:
+                    transient = not isinstance(
+                        error, APIStatusError
+                    ) or _status_retryable(error)
+                    if not transient:
+                        return {
+                            finding.finding_id: _error_result(error)
+                            for finding, _ in items
+                        }
+                    if attempt < 2:
+                        delay = _retry_after(error) or min(
+                            10.0, 2**attempt + max(0.0, float(jitter()))
+                        )
+                        if monotonic() + delay > deadline:
+                            error = ProviderDeadlineError()
+                            attempt = 2
+                        else:
+                            sleeper(delay)
+                            continue
+                    with breaker_lock:
+                        breaker["consecutive"] += 1
+                        if breaker["consecutive"] >= 3:
+                            breaker["open"] = True
+                    return {
+                        finding.finding_id: _error_result(error) for finding, _ in items
+                    }
+                except (
+                    ProviderToolError,
+                    OpenAIError,
+                    AttributeError,
+                    KeyError,
+                    TypeError,
+                    ValueError,
+                ) as error:
+                    return {
+                        finding.finding_id: _error_result(error) for finding, _ in items
+                    }
+            raise AssertionError("unreachable")
+        finally:
+            if lease_owner is not None and lease_key is not None:
+                try:
+                    release(lease_key, lease_owner)
+                except (OSError, RuntimeError, sqlite3.Error, TypeError):
+                    pass
 
     futures = []
     with ThreadPoolExecutor(max_workers=_SYNTHESIS_CONCURRENCY) as executor:
         for vuln_type, items in groups.items():
-            group = retrievals.get(vuln_type)
-            if group is None:
-                continue
+            group = GroupGrounding(vuln_type, bundles[vuln_type])
             for start in range(0, len(items), _BATCH_SIZE):
                 futures.append(
                     executor.submit(

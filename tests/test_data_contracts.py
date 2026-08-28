@@ -334,6 +334,86 @@ def test_provenance_rejects_timezone_less_timestamp() -> None:
         ProcessedRun.model_validate(payload)
 
 
+@pytest.mark.parametrize(
+    "retrieval_mode",
+    [
+        "REVIEWED_PACK",
+        "REVIEWED_PACK_PLUS_VERIFIED_CACHE",
+        "REVIEWED_PACK_PLUS_LOCAL_SEARCH",
+    ],
+)
+def test_provenance_accepts_complete_grounding_bundle(
+    retrieval_mode: str,
+) -> None:
+    payload = _processed_payload()
+    provenance = payload["findings"][0]["ai"]["provenance"]
+    provenance.update(
+        {
+            "retrieval_mode": retrieval_mode,
+            "grounding_bundle_digest": "a" * 64,
+            "grounding_pack_version": "reviewed-pack-v1",
+        }
+    )
+
+    run = ProcessedRun.model_validate(payload)
+
+    assert run.findings[0].ai.provenance.retrieval_mode == retrieval_mode
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "retrieval_mode",
+        "grounding_bundle_digest",
+        "grounding_pack_version",
+    ],
+)
+def test_provenance_rejects_partial_grounding_bundle(field: str) -> None:
+    payload = _processed_payload()
+    provenance = payload["findings"][0]["ai"]["provenance"]
+    provenance.update(
+        {
+            "retrieval_mode": "REVIEWED_PACK",
+            "grounding_bundle_digest": "a" * 64,
+            "grounding_pack_version": "reviewed-pack-v1",
+        }
+    )
+    provenance.pop(field)
+
+    with pytest.raises(ValidationError, match="must be all present or all absent"):
+        ProcessedRun.model_validate(payload)
+
+
+def test_provenance_rejects_invalid_grounding_bundle_digest() -> None:
+    payload = _processed_payload()
+    provenance = payload["findings"][0]["ai"]["provenance"]
+    provenance.update(
+        {
+            "retrieval_mode": "REVIEWED_PACK",
+            "grounding_bundle_digest": "A" * 64,
+            "grounding_pack_version": "reviewed-pack-v1",
+        }
+    )
+
+    with pytest.raises(ValidationError, match="string_pattern_mismatch"):
+        ProcessedRun.model_validate(payload)
+
+
+def test_provenance_accepts_legacy_absence_of_grounding_bundle() -> None:
+    payload = _processed_payload()
+    provenance = payload["findings"][0]["ai"]["provenance"]
+    for field in (
+        "retrieval_mode",
+        "grounding_bundle_digest",
+        "grounding_pack_version",
+    ):
+        provenance.pop(field, None)
+
+    run = ProcessedRun.model_validate(payload)
+
+    assert run.findings[0].ai.provenance.retrieval_mode is None
+
+
 def test_processed_run_rejects_schema_version_and_ai_role_mixing() -> None:
     legacy_with_role = _processed_payload()
     legacy_with_role["schema_version"] = "1.0"
