@@ -2,11 +2,25 @@
 
 실행 계약은 "런타임 스캐너는 OpenAI API를 호출하지 않는다"고 명시한다. 그래서
 AI 페이로드 생성은 스캔 경로(scanners/pipeline/xss.py, scanners/payload_profiles.py)
-밖으로 완전히 분리했다. 이 스크립트를 사람이 직접 실행해서 후보를 만들고,
-`data/raw/payload_profiles/<profile>.json`에 저장된 결과를 검토한 뒤(필요하면
-직접 편집해서) 그 상태로 커밋/공유해서 쓴다. 런타임 스캐너는 이 파일이
-있으면 그대로 읽고, 없으면 실행 준비 실패로 처리할 뿐 절대 이 스크립트를
-대신 호출하지 않는다.
+밖으로 완전히 분리했다.
+
+이 도구는 한 번 실행으로 두 산출물을 만든다.
+
+  1) data/raw/payload_profiles/<profile>.json
+     -- AI가 방금 만든 원본 초안(.gitignore 대상, 로컬 감사·비교용).
+  2) configs/payload-profiles/<profile>.json
+     -- scanners/payload_profiles.py가 실제로 읽는, Git에 커밋되는 "검토
+        완료" 프로필. source="reviewed-static", model=null로 고정해서
+        "이 파일은 더 이상 AI 원본이 아니라 사람이 책임지는 최종본"임을
+        스키마로 강제한다.
+
+사람이 검토할 지점은 2)번 파일이다. 실행 직후 이 파일을 열어 후보를 보고,
+필요하면 직접 항목을 수정/삭제한 뒤 커밋한다(수정 후에는
+scanners.payload_profiles.load_payload_profile()이 쓰는 것과 동일한 검증을
+이 도구가 --check로도 다시 돌려볼 수 있다).
+
+런타임 스캐너는 2)번 파일이 있으면 그대로 읽고, 없거나 스키마가 깨져 있으면
+실행 준비 실패로 처리할 뿐 절대 이 스크립트를 대신 호출하지 않는다.
 
 사용 예:
     python -m scanners.tools.generate_xss_payload_profile --profile xss-v1 --count 100
@@ -15,12 +29,15 @@ AI 페이로드 생성은 스캔 경로(scanners/pipeline/xss.py, scanners/paylo
 from __future__ import annotations
 
 import argparse
+import json
 import os
+from pathlib import Path
 
-from scanners import payload_cache
+from scanners import payload_cache, payload_profiles
 
 DEFAULT_MODEL = "gpt-4o"
 DEFAULT_COUNT = 100
+REVIEWED_PROFILE_ROOT = payload_profiles.DEFAULT_PROFILE_ROOT
 
 # OpenAI에게 역할을 부여하는 시스템 프롬프트.
 SYSTEM_PROMPT = (
@@ -96,13 +113,64 @@ def generate_ai_payloads(
     return payloads
 
 
+def _reviewed_profile_path(profile: str) -> Path:
+    return REVIEWED_PROFILE_ROOT / f"{profile}.json"
+
+
+def _promote_to_reviewed_profile(profile: str, payloads: list[str]) -> Path:
+    """AI 초안(payloads)을 payload_profiles.py가 요구하는 검토완료 스키마로 승격한다.
+
+    payload_cache가 붙인 "ai-{i:03d}" 형식의 payload_case_id는
+    payload_profiles._PAYLOAD_CASE_IDENTIFIER 정규식(^[a-z][a-z0-9-]*$)을
+    그대로 만족하므로 ID 체계는 바꾸지 않는다. 다만 새 로더는 중복 payload를
+    거부하므로, 여기서 먼저 중복을 제거해서 실행 시점이 아니라 생성 시점에
+    문제를 드러낸다.
+    """
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for p in payloads:
+        if p not in seen:
+            seen.add(p)
+            deduped.append(p)
+    if len(deduped) != len(payloads):
+        print(
+            f"[경고] AI가 중복 페이로드 {len(payloads) - len(deduped)}개를 만들어서 제거했습니다 "
+            f"({len(payloads)} -> {len(deduped)}개)."
+        )
+
+    reviewed = {
+        "profile": profile,
+        "version": "1.0",
+        "source": "reviewed-static",
+        "model": None,
+        "items": [
+            {"payload_case_id": f"ai-{i:03d}", "payload": p}
+            for i, p in enumerate(deduped, 1)
+        ],
+    }
+
+    out_path = _reviewed_profile_path(profile)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        json.dumps(reviewed, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    # 방금 쓴 파일이 실제 런타임 로더를 그대로 통과하는지 즉시 재확인한다.
+    # 여기서 실패하면 스캔 시점이 아니라 생성 시점에 바로 알 수 있다.
+    payload_profiles.load_payload_profile(profile, profiles_root=REVIEWED_PROFILE_ROOT)
+    return out_path
+
+
 def main() -> None:
     from dotenv import load_dotenv
 
     load_dotenv()
 
     parser = argparse.ArgumentParser(
-        description="XSS payload profile을 AI로 생성해 data/raw/payload_profiles/에 저장한다."
+        description=(
+            "XSS payload profile을 AI로 생성해 data/raw/payload_profiles/(초안)와 "
+            "configs/payload-profiles/(런타임이 실제로 읽는 검토완료본)에 저장한다."
+        )
     )
     parser.add_argument(
         "--profile",
@@ -118,26 +186,35 @@ def main() -> None:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="이미 저장된 profile 파일이 있어도 덮어쓴다(기본은 실수 방지를 위해 거부).",
+        help=(
+            "configs/payload-profiles/<profile>.json이 이미 있어도 덮어쓴다"
+            "(기본은 사람이 검토한 기존 목록을 실수로 지우지 않기 위한 안전장치)."
+        ),
     )
     args = parser.parse_args()
 
-    cache_path = payload_cache.cache_path_for(args.profile)
-    if cache_path.exists() and not args.force:
+    reviewed_path = _reviewed_profile_path(args.profile)
+    if reviewed_path.exists() and not args.force:
         raise SystemExit(
-            f"이미 '{cache_path}'가 있습니다. 덮어쓰려면 --force를 붙이세요 "
+            f"이미 검토완료본 '{reviewed_path}'가 있습니다. 덮어쓰려면 --force를 붙이세요 "
             "(사람이 검토한 기존 목록을 실수로 지우지 않기 위한 안전장치)."
         )
 
     model = os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
     payloads = generate_ai_payloads(args.count, model=model)
-    cache = payload_cache.save(
-        cache_path, args.profile, payloads, source="openai", model=model
-    )
 
-    print(f"\n저장 완료: {cache_path} ({len(cache.items)}개)")
+    # 1) 초안은 그대로 data/raw에 남긴다(감사/비교용, Git 제외).
+    draft_cache_path = payload_cache.cache_path_for(args.profile)
+    payload_cache.save(draft_cache_path, args.profile, payloads, source="openai", model=model)
+    print(f"[초안 저장] {draft_cache_path} ({len(payloads)}개)")
+
+    # 2) 런타임이 실제로 읽는 검토완료본은 configs/payload-profiles에 승격한다.
+    reviewed_path = _promote_to_reviewed_profile(args.profile, payloads)
+    print(f"[검토완료본 저장] {reviewed_path}")
     print(
-        "계속 진행하기 전에 이 파일을 열어 후보를 검토하세요. 필요하면 항목을 직접 수정/삭제해도 됩니다."
+        "\n계속 진행하기 전에 위 검토완료본 파일을 열어 후보를 검토하세요. "
+        "필요하면 항목을 직접 수정/삭제한 뒤 커밋하면 됩니다 "
+        "(scanners/payload_profiles.py가 실제로 읽는 파일은 이쪽입니다)."
     )
 
 
