@@ -831,6 +831,9 @@ def test_findings_dataframe_flattens_evidence_and_legacy_defaults() -> None:
     assert json.loads(grounded["claims_json"])[0]["claim_id"] == "C1"
     assert json.loads(grounded["references_json"])[0]["reference_id"] == "R1"
     assert grounded["provenance_model"] == "gpt-4o-mini"
+    assert grounded["provenance_retrieval_mode"] is None
+    assert grounded["provenance_grounding_pack_version"] is None
+    assert grounded["provenance_grounding_bundle_digest"] is None
 
     payload["schema_version"] = "1.0"
     payload["status"] = "COMPLETED"
@@ -849,6 +852,42 @@ def test_findings_dataframe_flattens_evidence_and_legacy_defaults() -> None:
     assert legacy["reference_count"] == 0
     assert legacy["claims_json"] == "[]"
     assert legacy["references_json"] == "[]"
+    assert legacy["provenance_retrieval_mode"] is None
+    assert legacy["provenance_grounding_pack_version"] is None
+    assert legacy["provenance_grounding_bundle_digest"] is None
+
+
+@pytest.mark.parametrize(
+    ("retrieval_mode", "display"),
+    [
+        ("REVIEWED_PACK", "검토 Pack"),
+        ("REVIEWED_PACK_PLUS_VERIFIED_CACHE", "검토 Pack + 검증 Cache"),
+        ("REVIEWED_PACK_PLUS_LOCAL_SEARCH", "검토 Pack + 로컬 공식문서 검색"),
+    ],
+)
+def test_findings_dataframe_flattens_grounding_bundle_and_displays_mode(
+    retrieval_mode: str, display: str
+) -> None:
+    payload = json.loads(SAMPLE_PATH.read_text())
+    provenance = payload["findings"][0]["ai"]["provenance"]
+    provenance.update(
+        {
+            "retrieval_mode": retrieval_mode,
+            "grounding_pack_version": "reviewed-pack-v1",
+            "grounding_bundle_digest": "a" * 64,
+        }
+    )
+
+    finding = findings_to_dataframe(
+        load_processed_data(StringIO(json.dumps(payload)))
+    ).iloc[0]
+
+    assert finding["provenance_retrieval_mode"] == retrieval_mode
+    assert finding["provenance_grounding_pack_version"] == "reviewed-pack-v1"
+    assert finding["provenance_grounding_bundle_digest"] == "a" * 64
+    assert (
+        _display_enum("retrieval_mode", finding["provenance_retrieval_mode"]) == display
+    )
 
 
 def test_dashboard_rechecks_official_link_allowlist() -> None:

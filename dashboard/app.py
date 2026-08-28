@@ -103,6 +103,11 @@ DISPLAY_LABELS = {
         "XSS": "크로스 사이트 스크립팅 (XSS)",
         "SQLI": "SQL 삽입 (SQLI)",
     },
+    "retrieval_mode": {
+        "REVIEWED_PACK": "검토 Pack",
+        "REVIEWED_PACK_PLUS_VERIFIED_CACHE": "검토 Pack + 검증 Cache",
+        "REVIEWED_PACK_PLUS_LOCAL_SEARCH": "검토 Pack + 로컬 공식문서 검색",
+    },
 }
 
 TRUSTED_CSS = """
@@ -581,17 +586,29 @@ def _render_detail(df: pd.DataFrame) -> None:
                 else:
                     st.caption(f"Canonical URL: {_text(canonical_url)}")
             st.caption("생성 이력")
+            provenance_details = [
+                ("model", "provenance_model"),
+                ("prompt", "provenance_prompt_version"),
+                ("KB", "provenance_knowledge_base_version"),
+                ("schema", "provenance_output_schema_version"),
+                ("retrieval policy", "provenance_retrieval_policy_version"),
+                ("generated_at", "provenance_generated_at"),
+            ]
+            for label, column in (
+                ("근거 획득 방식", "provenance_retrieval_mode"),
+                ("근거 Pack", "provenance_grounding_pack_version"),
+                ("근거 Bundle digest", "provenance_grounding_bundle_digest"),
+            ):
+                if pd.notna(finding.get(column)):
+                    value = (
+                        _display_enum("retrieval_mode", finding[column])
+                        if column == "provenance_retrieval_mode"
+                        else _text(finding[column])
+                    )
+                    provenance_details.append((label, value))
             st.code(
                 "\n".join(
-                    f"{label}: {_text(finding.get(column))}"
-                    for label, column in (
-                        ("model", "provenance_model"),
-                        ("prompt", "provenance_prompt_version"),
-                        ("KB", "provenance_knowledge_base_version"),
-                        ("schema", "provenance_output_schema_version"),
-                        ("retrieval policy", "provenance_retrieval_policy_version"),
-                        ("generated_at", "provenance_generated_at"),
-                    )
+                    f"{label}: {_text(value)}" for label, value in provenance_details
                 ),
                 language="text",
             )

@@ -55,7 +55,7 @@ def test_excel_report_has_safe_review_sheets_and_round_trips() -> None:
         assert worksheet.freeze_panes == "A5"
 
     detail = workbook["상세결과"]
-    assert detail.auto_filter.ref == "A4:AG5"
+    assert detail.auto_filter.ref == "A4:AJ5"
     assert detail["E5"].value == "'=https://example.test/search"
     assert detail["I5"].value == "'+OR 1=1"
     assert detail["P5"].value == "'@evidence"
@@ -81,7 +81,48 @@ def test_excel_report_supports_an_empty_filtered_result() -> None:
         "판정비교",
         "공식근거",
     ]
-    assert workbook["상세결과"].auto_filter.ref == "A4:AG4"
+    assert workbook["상세결과"].auto_filter.ref == "A4:AJ4"
+
+
+def test_excel_ai_draft_and_recommendation_include_canonical_grounding_bundle() -> None:
+    findings = pd.DataFrame(
+        [
+            {
+                "case_id": "case-1",
+                "finding_id": "finding-1",
+                "scan_status": "COMPLETED",
+                "rule_label": "SUSPECTED",
+                "ai_status": "COMPLETED",
+                "ai_label": "SAFE",
+                "needs_human_review": True,
+                "provenance_retrieval_mode": "REVIEWED_PACK_PLUS_LOCAL_SEARCH",
+                "provenance_grounding_pack_version": "reviewed-pack-v1",
+                "provenance_grounding_bundle_digest": "a" * 64,
+            }
+        ]
+    )
+
+    workbook = load_workbook(
+        BytesIO(build_excel_report(findings, {"scan_run_id": "run-1"}))
+    )
+    for sheet_name in ("상세결과", "조치권고"):
+        worksheet = workbook[sheet_name]
+        headers = {
+            cell.value: column
+            for column, cell in enumerate(worksheet[4], start=1)
+            if cell.value is not None
+        }
+        assert [
+            headers["근거 획득 방식"],
+            headers["근거 Pack"],
+            headers["근거 Bundle digest"],
+        ]
+        assert (
+            worksheet.cell(5, headers["근거 획득 방식"]).value
+            == "REVIEWED_PACK_PLUS_LOCAL_SEARCH"
+        )
+        assert worksheet.cell(5, headers["근거 Pack"]).value == "reviewed-pack-v1"
+        assert worksheet.cell(5, headers["근거 Bundle digest"]).value == "a" * 64
 
 
 def test_excel_comparison_uses_semantic_rule_ai_matches() -> None:

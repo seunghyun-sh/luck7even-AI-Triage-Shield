@@ -154,6 +154,19 @@ def findings_to_dataframe(run: ProcessedRun) -> pd.DataFrame:
                 if finding.ai.provenance
                 else None
             ),
+            "provenance_retrieval_mode": (
+                finding.ai.provenance.retrieval_mode if finding.ai.provenance else None
+            ),
+            "provenance_grounding_pack_version": (
+                finding.ai.provenance.grounding_pack_version
+                if finding.ai.provenance
+                else None
+            ),
+            "provenance_grounding_bundle_digest": (
+                finding.ai.provenance.grounding_bundle_digest
+                if finding.ai.provenance
+                else None
+            ),
             "provenance_generated_at": (
                 finding.ai.provenance.generated_at.isoformat()
                 if finding.ai.provenance
@@ -214,6 +227,9 @@ def findings_to_dataframe(run: ProcessedRun) -> pd.DataFrame:
         "provenance_knowledge_base_version",
         "provenance_output_schema_version",
         "provenance_retrieval_policy_version",
+        "provenance_retrieval_mode",
+        "provenance_grounding_pack_version",
+        "provenance_grounding_bundle_digest",
         "provenance_generated_at",
         "provenance_vector_store_ids_json",
         "provenance_retrieved_file_ids_json",

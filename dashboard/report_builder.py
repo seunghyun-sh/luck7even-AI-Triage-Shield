@@ -59,6 +59,9 @@ _DETAIL_COLUMNS = (
     ("provenance_knowledge_base_version", "지식베이스 버전"),
     ("provenance_output_schema_version", "출력 스키마 버전"),
     ("provenance_retrieval_policy_version", "검색 정책 버전"),
+    ("provenance_retrieval_mode", "근거 획득 방식"),
+    ("provenance_grounding_pack_version", "근거 Pack"),
+    ("provenance_grounding_bundle_digest", "근거 Bundle digest"),
     ("provenance_generated_at", "생성 시각"),
     ("ai_role", "AI 역할"),
 )
@@ -81,6 +84,9 @@ _RECOMMENDATION_COLUMNS = (
     ("provenance_knowledge_base_version", "지식베이스 버전"),
     ("provenance_output_schema_version", "출력 스키마 버전"),
     ("provenance_retrieval_policy_version", "검색 정책 버전"),
+    ("provenance_retrieval_mode", "근거 획득 방식"),
+    ("provenance_grounding_pack_version", "근거 Pack"),
+    ("provenance_grounding_bundle_digest", "근거 Bundle digest"),
     ("provenance_generated_at", "생성 시각"),
 )
 _COMPARISON_COLUMNS = (
