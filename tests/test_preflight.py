@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from analysis.models import TargetCase, TargetInput, TargetManifest, VulnType
-from orchestration.models import ExecutionStatus, RunRequest
+from orchestration.models import RunRequest
 from orchestration.preflight import Readiness, run_preflight
 from orchestration.run_store import RunStore
 
@@ -124,23 +124,30 @@ def test_preflight_normalizes_arbitrary_component_initialization_error(
     assert "secret" not in scanner.message
 
 
-def test_preflight_blocks_active_lock(tmp_path: Path) -> None:
-    lock_path = tmp_path / "runs" / ".pipeline.lock"
-    lock_path.parent.mkdir()
-    lock_path.write_text("active")
-
-    result = run_preflight(
-        _manifest(),
-        ["XSS"],
-        tmp_path,
-        http_requester=lambda *args, **kwargs: SimpleNamespace(status_code=200),
-        module_importer=_importer,
+def test_preflight_blocks_active_lock_without_mutating_owner_state(tmp_path: Path) -> None:
+    store = RunStore(tmp_path)
+    status = store.create_run(
+        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
     )
 
-    assert "PIPELINE_LOCK_ACTIVE" in _codes(result)
+    with store.pipeline_lock(status.scan_run_id):
+        lock_path = store.runs_dir / ".pipeline.lock"
+        original = lock_path.read_bytes()
+        before = store.load_status(status.scan_run_id)
+        result = run_preflight(
+            _manifest(),
+            ["XSS"],
+            tmp_path,
+            http_requester=lambda *args, **kwargs: SimpleNamespace(status_code=200),
+            module_importer=_importer,
+        )
+
+        assert "PIPELINE_LOCK_ACTIVE" in _codes(result)
+        assert lock_path.read_bytes() == original
+        assert store.load_status(status.scan_run_id) == before
 
 
-def test_preflight_recovers_verified_stale_lock(tmp_path: Path) -> None:
+def test_preflight_ignores_stale_metadata_without_reconciliation(tmp_path: Path) -> None:
     store = RunStore(tmp_path)
     status = store.create_run(
         RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
@@ -155,6 +162,7 @@ def test_preflight_recovers_verified_stale_lock(tmp_path: Path) -> None:
             }
         )
     )
+    original = lock_path.read_bytes()
 
     result = run_preflight(
         _manifest(),
@@ -165,7 +173,8 @@ def test_preflight_recovers_verified_stale_lock(tmp_path: Path) -> None:
     )
 
     assert "PIPELINE_LOCK_CLEAR" in _codes(result)
-    assert store.load_status(status.scan_run_id).status is ExecutionStatus.FAILED
+    assert store.load_status(status.scan_run_id) == status
+    assert lock_path.read_bytes() == original
 
 
 def test_preflight_blocks_missing_manifest_type(tmp_path: Path) -> None:

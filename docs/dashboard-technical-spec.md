@@ -56,7 +56,20 @@ Streamlit 코드에 데이터 검증, 지표 산식과 Excel 생성 로직을 �
 - `PARTIAL`: 불완전 경고 후 검토·평가·Excel 허용, 실패 건수 명시
 - `FAILED`: 오류 표시만 허용하고 지표·Excel 차단
 
-대시보드는 final path에 원자적으로 게시된 파일만 읽는다.
+자동 발견과 terminal CTA는 `RunStore.load_reviewable_processed_run(scan_run_id)`의
+결합 검증을 통과한 final path만 읽는다. 이 검증은 request·status·processed
+envelope의 `scan_run_id`와 `target_set_id`가 모두 같고, status와 envelope의 값이
+동일한 `COMPLETED` 또는 `PARTIAL`인지 확인한다. 경로는 정확히
+`processed/<scan_run_id>/results.json`이어야 하며 data root 안의 기존 일반 파일이어야
+한다. `FAILED`, 잘못된 JSON, 불일치 envelope 및 symlink escape는 자동 검토 후보와
+CTA에서 제외한다. 샘플과 사용자가 업로드한 JSON은 명시적 입력이므로 이 자동 발견
+결합 조건과 별도로 계속 지원한다.
+
+실행 중 UI의 active source는 run directory 순회가 아니라
+`RunStore.active_run_status()`가 확인한 live advisory-lock owner뿐이다. lock 없는
+`QUEUED`/`RUNNING` orphan은 설정 화면을 가리지 않으며, orphan과 live owner가
+공존하면 owner만 표시한다. rediscovery한 owner ID는 session selection에 보존하여
+fragment polling 중 terminal 전환 후에도 terminal summary와 검토 CTA를 유지한다.
 
 ### 4.3 Finding 상태
 
@@ -105,6 +118,8 @@ confidence 평균은 핵심 KPI로 제공하지 않는다.
 
 - ground truth는 processed JSON과 별도로 읽는다.
 - `(target_set_id, case_id)`로 결합하고 결합 cardinality와 `vuln_type` 일치를 검증한다.
+- 화면 필터 범위의 SQLi 지표를 계산하기 전에 전체 validated processed DataFrame과 전체 GroundTruthSet을 `build_evaluation`으로 먼저 검증한다. 따라서 필터로 제외된 case의 target set 불일치, 누락 case, 중복 key, SQLI 이외 ground truth, vuln_type 불일치도 평가 결합 오류로 유지한다.
+- 전체 검증이 성공한 뒤에만 현재 필터의 SQLi `case_id`와 교집합인 ground truth subset으로 화면 범위 지표를 계산한다. 교집합이 비어 있으면 유효한 빈 평가 상태를 표시한다.
 - 결합 오류가 있어도 일반 결과 검토는 유지하고 평가만 중단한다.
 - positive class는 `VULNERABLE`이다.
 - 평가 cohort는 binary ground truth, `ai.status=COMPLETED`, binary AI label을 모두 만족한 항목이다.

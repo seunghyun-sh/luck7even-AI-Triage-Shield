@@ -7,8 +7,15 @@ from typing import Any
 
 import pandas as pd
 
+from analysis.models import AiStatus, ScanStatus
+
 _BINARY_LABELS = frozenset({"VULNERABLE", "SAFE"})
 _EVALUATION_KEY = ["target_set_id", "case_id"]
+_SCAN_COMPLETED = ScanStatus.COMPLETED.value
+_SCAN_FAILED = ScanStatus.FAILED.value
+_AI_COMPLETED = AiStatus.COMPLETED.value
+_AI_NOT_REQUESTED = AiStatus.NOT_REQUESTED.value
+_AI_FAILED = AiStatus.FAILED.value
 
 
 def _empty_counts(label_column: str) -> pd.DataFrame:
@@ -37,11 +44,13 @@ def _ai_verdicts(df: pd.DataFrame) -> pd.Series:
     return pd.Series(
         [
             value
-            if current_status == "COMPLETED"
+            if current_status == _AI_COMPLETED
             and value in _BINARY_LABELS | {"INCONCLUSIVE"}
             else None
-            if current_status == "COMPLETED"
+            if current_status == _AI_COMPLETED
             else current_status
+            if current_status in {_AI_NOT_REQUESTED, _AI_FAILED}
+            else None
             for current_status, value in zip(status, label, strict=True)
         ],
         index=df.index,
@@ -61,6 +70,10 @@ def build_summary(df: pd.DataFrame) -> dict[str, int]:
             "total_findings": 0,
             "ai_vulnerable": 0,
             "ai_inconclusive": 0,
+            "scan_completed": 0,
+            "scan_failed": 0,
+            "ai_completed": 0,
+            "ai_not_requested": 0,
             "ai_failed": 0,
             "needs_human_review": 0,
             "rule_suspected": 0,
@@ -69,20 +82,28 @@ def build_summary(df: pd.DataFrame) -> dict[str, int]:
     return {
         "total_findings": len(df),
         "ai_vulnerable": int(
-            ((df["ai_status"] == "COMPLETED") & (df["ai_label"] == "VULNERABLE")).sum()
+            (
+                (df["ai_status"] == _AI_COMPLETED)
+                & (df["ai_label"] == "VULNERABLE")
+            ).sum()
         ),
         "ai_inconclusive": int(
             (
-                (df["ai_status"] == "COMPLETED") & (df["ai_label"] == "INCONCLUSIVE")
+                (df["ai_status"] == _AI_COMPLETED) & (df["ai_label"] == "INCONCLUSIVE")
             ).sum()
         ),
-        "ai_failed": int((df["ai_status"] == "FAILED").sum()),
+        "scan_completed": int((df["scan_status"] == _SCAN_COMPLETED).sum()),
+        "scan_failed": int((df["scan_status"] == _SCAN_FAILED).sum()),
+        "ai_completed": int((df["ai_status"] == _AI_COMPLETED).sum()),
+        "ai_not_requested": int((df["ai_status"] == _AI_NOT_REQUESTED).sum()),
+        "ai_failed": int((df["ai_status"] == _AI_FAILED).sum()),
         "needs_human_review": int(
             df["needs_human_review"].map(lambda value: value is True).sum()
         ),
         "rule_suspected": int(
             (
-                (df["scan_status"] == "COMPLETED") & (df["rule_label"] == "SUSPECTED")
+                (df["scan_status"] == _SCAN_COMPLETED)
+                & (df["rule_label"] == "SUSPECTED")
             ).sum()
         ),
     }
@@ -130,8 +151,8 @@ def build_rule_ai_comparison(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["rule_label", "ai_label", "count"])
 
     rule_verdict = df["rule_label"].where(
-        df["scan_status"] == "COMPLETED",
-        df["scan_status"],
+        df["scan_status"] == _SCAN_COMPLETED,
+        df["scan_status"].where(df["scan_status"] == _SCAN_FAILED),
     )
     comparison = pd.DataFrame(
         {"rule_label": rule_verdict, "ai_label": _ai_verdicts(df)}
@@ -261,22 +282,22 @@ def build_evaluation(df: pd.DataFrame, ground_truth: Any) -> dict[str, Any]:
         raise ValueError("Processed finding vuln_type does not match ground truth.")
 
     scored = (
-        (joined["scan_status"] == "COMPLETED")
-        & (joined["ai_status"] == "COMPLETED")
+        (joined["scan_status"] == _SCAN_COMPLETED)
+        & (joined["ai_status"] == _AI_COMPLETED)
         & joined["ai_label"].isin(_BINARY_LABELS)
     )
     exclusion_reason = pd.Series(None, index=joined.index, dtype="object")
-    exclusion_reason.loc[joined["scan_status"] != "COMPLETED"] = "SCAN_FAILED"
+    exclusion_reason.loc[joined["scan_status"] == _SCAN_FAILED] = "SCAN_FAILED"
     exclusion_reason.loc[
         exclusion_reason.isna()
-        & (joined["ai_status"] == "COMPLETED")
+        & (joined["ai_status"] == _AI_COMPLETED)
         & (joined["ai_label"] == "INCONCLUSIVE")
     ] = "AI_INCONCLUSIVE"
     exclusion_reason.loc[
-        exclusion_reason.isna() & (joined["ai_status"] == "NOT_REQUESTED")
+        exclusion_reason.isna() & (joined["ai_status"] == _AI_NOT_REQUESTED)
     ] = "AI_NOT_REQUESTED"
     exclusion_reason.loc[
-        exclusion_reason.isna() & (joined["ai_status"] == "FAILED")
+        exclusion_reason.isna() & (joined["ai_status"] == _AI_FAILED)
     ] = "AI_FAILED"
     exclusion_reason.loc[exclusion_reason.isna() & ~scored] = "INVALID_AI_LABEL"
     excluded = {

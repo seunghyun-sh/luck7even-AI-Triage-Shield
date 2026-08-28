@@ -3,6 +3,7 @@ from io import BytesIO
 import pandas as pd
 from openpyxl import load_workbook
 
+from dashboard.metrics import build_summary
 from dashboard.report_builder import build_excel_report
 
 
@@ -114,3 +115,124 @@ def test_excel_comparison_uses_semantic_rule_ai_matches() -> None:
         "일치",
         None,
     ]
+
+
+def test_partial_report_summary_matches_dashboard_status_counts_and_evaluation() -> None:
+    findings = pd.DataFrame(
+        [
+            {
+                "case_id": "completed",
+                "finding_id": "finding-1",
+                "vuln_type": "SQLI",
+                "scan_status": "COMPLETED",
+                "rule_label": "SUSPECTED",
+                "ai_status": "COMPLETED",
+                "ai_label": "VULNERABLE",
+                "needs_human_review": False,
+            },
+            {
+                "case_id": "not-requested",
+                "finding_id": "finding-2",
+                "vuln_type": "SQLI",
+                "scan_status": "COMPLETED",
+                "rule_label": "SAFE",
+                "ai_status": "NOT_REQUESTED",
+                "ai_label": None,
+                "needs_human_review": True,
+            },
+            {
+                "case_id": "ai-failed",
+                "finding_id": "finding-3",
+                "vuln_type": "SQLI",
+                "scan_status": "COMPLETED",
+                "rule_label": "SUSPECTED",
+                "ai_status": "FAILED",
+                "ai_label": None,
+                "needs_human_review": True,
+            },
+            {
+                "case_id": "scan-failed",
+                "finding_id": "finding-4",
+                "vuln_type": "SQLI",
+                "scan_status": "FAILED",
+                "rule_label": None,
+                "ai_status": "NOT_REQUESTED",
+                "ai_label": None,
+                "needs_human_review": True,
+            },
+        ]
+    )
+    evaluation = {
+        "n_labeled": 4,
+        "n_scored": 1,
+        "scored_coverage": 0.25,
+        "excluded_counts": {
+            "ai_inconclusive": 0,
+            "ai_not_requested": 1,
+            "ai_failed": 1,
+            "scan_failed": 1,
+            "invalid_ai_label": 0,
+        },
+    }
+
+    workbook = load_workbook(
+        BytesIO(
+            build_excel_report(
+                findings,
+                {"scan_run_id": "partial-run", "status": "PARTIAL"},
+                evaluation,
+            )
+        )
+    )
+    summary_rows = {
+        row[0]: row[1]
+        for row in workbook["진단요약"].iter_rows(min_row=5, values_only=True)
+        if row[0] is not None
+    }
+    dashboard_summary = build_summary(findings)
+
+    assert {
+        "전체 Finding": summary_rows["전체 Finding"],
+        "스캔 완료": summary_rows["스캔 완료"],
+        "스캔 실패": summary_rows["스캔 실패"],
+        "AI 완료": summary_rows["AI 완료"],
+        "AI 미요청": summary_rows["AI 미요청"],
+        "AI 취약 판정": summary_rows["AI 취약 판정"],
+        "AI 판정 불가": summary_rows["AI 판정 불가"],
+        "AI 처리 실패": summary_rows["AI 처리 실패"],
+        "수동 검토 필요": summary_rows["수동 검토 필요"],
+        "규칙 취약 의심": summary_rows["규칙 취약 의심"],
+    } == {
+        "전체 Finding": dashboard_summary["total_findings"],
+        "스캔 완료": dashboard_summary["scan_completed"],
+        "스캔 실패": dashboard_summary["scan_failed"],
+        "AI 완료": dashboard_summary["ai_completed"],
+        "AI 미요청": dashboard_summary["ai_not_requested"],
+        "AI 취약 판정": dashboard_summary["ai_vulnerable"],
+        "AI 판정 불가": dashboard_summary["ai_inconclusive"],
+        "AI 처리 실패": dashboard_summary["ai_failed"],
+        "수동 검토 필요": dashboard_summary["needs_human_review"],
+        "규칙 취약 의심": dashboard_summary["rule_suspected"],
+    }
+    assert {
+        key: summary_rows[key]
+        for key in (
+            "evaluation.n_labeled",
+            "evaluation.n_scored",
+            "evaluation.scored_coverage",
+            "evaluation.excluded_counts.ai_inconclusive",
+            "evaluation.excluded_counts.ai_not_requested",
+            "evaluation.excluded_counts.ai_failed",
+            "evaluation.excluded_counts.scan_failed",
+            "evaluation.excluded_counts.invalid_ai_label",
+        )
+    } == {
+        "evaluation.n_labeled": 4,
+        "evaluation.n_scored": 1,
+        "evaluation.scored_coverage": 0.25,
+        "evaluation.excluded_counts.ai_inconclusive": 0,
+        "evaluation.excluded_counts.ai_not_requested": 1,
+        "evaluation.excluded_counts.ai_failed": 1,
+        "evaluation.excluded_counts.scan_failed": 1,
+        "evaluation.excluded_counts.invalid_ai_label": 0,
+    }

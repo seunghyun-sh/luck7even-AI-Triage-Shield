@@ -17,11 +17,10 @@ venv/
 data/raw/*
 data/processed/*
 data/exports/*
-data/runs/*
+data/runs/
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/exports/.gitkeep
-!data/runs/.gitkeep
 *.db
 *.sqlite
 *.sqlite3
