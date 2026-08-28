@@ -462,14 +462,14 @@ class AiResult(ContractModel):
         if self.status is AiStatus.COMPLETED:
             if self.grounding_status is GroundingStatus.GROUNDED:
                 if (
-                    self.label is not AiLabel.INCONCLUSIVE
-                    or self.confidence is not None
+                    self.label is None
+                    or self.confidence is None
                     or not self.needs_human_review
                     or self.status_reason is not None
                     or self.error is not None
                 ):
                     raise ValueError(
-                        "grounded evidence AI result requires inconclusive label, null confidence, human review, and no status_reason or error"
+                        "grounded evidence AI result requires label, confidence, human review, and no status_reason or error"
                     )
                 if any(
                     value is None or not value.strip() for value in generated_fields

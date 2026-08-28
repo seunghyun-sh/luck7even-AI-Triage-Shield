@@ -101,17 +101,26 @@ _REDACTIONS = (
 )
 
 
-class ProviderClaim(BaseModel):
+class ProviderObservation(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    claim_type: AiClaimType
     text: str = Field(min_length=1)
-    evidence_ids: list[str] = Field(default_factory=list)
-    reference_file_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(min_length=1)
+
+
+class ProviderReferenceClaim(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    text: str = Field(min_length=1)
+    reference_file_ids: list[str] = Field(min_length=1)
 
 
 class ProviderAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    claims: list[ProviderClaim] = Field(default_factory=list)
+    label: AiLabel
+    confidence: float = Field(ge=0.0, le=1.0)
+    observation: ProviderObservation
+    impact: ProviderReferenceClaim
+    recommendation: ProviderReferenceClaim
+    manual_check: ProviderReferenceClaim
 
 
 class ProviderSchemaError(ValueError):
@@ -380,13 +389,13 @@ def _cache_key(
     )
 
 
-def _not_requested(reason: AiStatusReason) -> AiResult:
+def _not_requested(reason: AiStatusReason, *, needs_human_review: bool) -> AiResult:
     return AiResult(
         status=AiStatus.NOT_REQUESTED,
         status_reason=reason,
         label=None,
         confidence=None,
-        needs_human_review=True,
+        needs_human_review=needs_human_review,
         assessment_summary=None,
         source_evidence=None,
         impact=None,
@@ -580,7 +589,7 @@ def _provider(
     monotonic: Any = time.monotonic,
     jitter: Any = lambda: 0.0,
     retry_budget: float = _RETRY_BUDGET_SECONDS,
-) -> tuple[ProviderAnalysis, set[str], set[str]]:
+) -> tuple[ProviderAnalysis | None, set[str], set[str]]:
     model, deadline = _configured_model(), monotonic() + retry_budget
     for attempt in range(3):
         try:
@@ -606,7 +615,7 @@ def _provider(
             )
             contexts, cited = _extract_retrieval(retrieval)
             if not contexts:
-                return ProviderAnalysis(), set(), cited
+                return None, set(), cited
             sources = source_map_by_file_id(manifest)
             context_file_ids = {item["file_id"] for item in contexts}
             if cited - context_file_ids or any(
@@ -671,7 +680,7 @@ def _provider(
 
 
 def _grounded(
-    parsed: ProviderAnalysis,
+    parsed: ProviderAnalysis | None,
     retrieved: set[str],
     cited: set[str],
     evidence: dict[str, str],
@@ -681,7 +690,6 @@ def _grounded(
     now: Any,
 ) -> AiResult:
     trusted = retrieved & cited
-    claimed = {fid for claim in parsed.claims for fid in claim.reference_file_ids}
     sources = source_map_by_file_id(manifest)
     if any(
         fid not in sources or vuln_type not in sources[fid].vuln_types
@@ -690,24 +698,25 @@ def _grounded(
         raise ReferenceMismatchError
     if not retrieved:
         return _insufficient(model, manifest, [], now)
-    if not parsed.claims:
+    if parsed is None:
         return _insufficient(model, manifest, sorted(retrieved), now)
+    provider_claims = (
+        parsed.impact,
+        parsed.recommendation,
+        parsed.manual_check,
+    )
+    claimed = {fid for claim in provider_claims for fid in claim.reference_file_ids}
     if claimed - trusted:
         raise ReferenceMismatchError
     if not trusted:
         return _insufficient(model, manifest, sorted(retrieved), now)
-    if any(
-        set(claim.evidence_ids) - set(evidence) for claim in parsed.claims
-    ) or not set(AiClaimType).issubset({claim.claim_type for claim in parsed.claims}):
+    if set(parsed.observation.evidence_ids) - set(evidence):
         raise ProviderSchemaError
-    if any(
-        not claim.evidence_ids
-        for claim in parsed.claims
-        if claim.claim_type is AiClaimType.OBSERVATION
+    if len(parsed.observation.evidence_ids) != len(
+        set(parsed.observation.evidence_ids)
     ) or any(
-        not claim.reference_file_ids
-        for claim in parsed.claims
-        if claim.claim_type is not AiClaimType.OBSERVATION
+        len(claim.reference_file_ids) != len(set(claim.reference_file_ids))
+        for claim in provider_claims
     ):
         raise ProviderSchemaError
     refs, ref_ids = [], {}
@@ -729,14 +738,34 @@ def _grounded(
         )
     claims = [
         AiClaim(
+            claim_id="C1",
+            claim_type=AiClaimType.OBSERVATION,
+            text=_redact(parsed.observation.text),
+            evidence_ids=parsed.observation.evidence_ids,
+            reference_ids=[],
+        )
+    ]
+    claims.extend(
+        AiClaim(
             claim_id=f"C{index}",
-            claim_type=claim.claim_type,
+            claim_type=claim_type,
             text=_redact(claim.text),
-            evidence_ids=claim.evidence_ids,
+            evidence_ids=[],
             reference_ids=[ref_ids[fid] for fid in claim.reference_file_ids],
         )
-        for index, claim in enumerate(parsed.claims, 1)
-    ]
+        for index, (claim_type, claim) in enumerate(
+            zip(
+                (
+                    AiClaimType.IMPACT,
+                    AiClaimType.RECOMMENDATION,
+                    AiClaimType.MANUAL_CHECK,
+                ),
+                provider_claims,
+                strict=True,
+            ),
+            2,
+        )
+    )
 
     def text(kind: AiClaimType) -> str:
         return " ".join(
@@ -749,8 +778,8 @@ def _grounded(
     return AiResult(
         status=AiStatus.COMPLETED,
         status_reason=None,
-        label=AiLabel.INCONCLUSIVE,
-        confidence=None,
+        label=parsed.label,
+        confidence=parsed.confidence,
         needs_human_review=True,
         assessment_summary=observation,
         source_evidence="; ".join(f"{key}: {value}" for key, value in evidence.items()),
@@ -853,9 +882,11 @@ def triage(
     manifest, default_cache, results = knowledge_base, None, []
     for finding in raw_run.findings:
         if finding.scan.status is ScanStatus.FAILED:
-            ai = _not_requested(AiStatusReason.SCAN_FAILED)
+            ai = _not_requested(AiStatusReason.SCAN_FAILED, needs_human_review=True)
         elif finding.scan.rule.label is RuleLabel.SAFE:
-            ai = _not_requested(AiStatusReason.RULE_NOT_SUSPECTED)
+            ai = _not_requested(
+                AiStatusReason.RULE_NOT_SUSPECTED, needs_human_review=False
+            )
         else:
             try:
                 _load_environment()
@@ -996,7 +1027,7 @@ def triage(
         scan_run_id=raw_run.scan_run_id,
         target_set_id=raw_run.target_set_id,
         started_at=raw_run.started_at,
-        completed_at=raw_run.completed_at or now(),
+        completed_at=now(),
         status=status,
         findings=results,
     )

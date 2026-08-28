@@ -24,7 +24,12 @@ GROUND_TRUTH_FIXTURE = ROOT / "configs" / "ground-truth.example.json"
 
 
 def _processed_payload() -> dict[str, object]:
-    return json.loads(PROCESSED_FIXTURE.read_text(encoding="utf-8"))
+    payload = json.loads(PROCESSED_FIXTURE.read_text(encoding="utf-8"))
+    for finding in payload["findings"]:
+        ai = finding["ai"]
+        if ai["grounding_status"] == "GROUNDED" and ai["confidence"] is None:
+            ai["confidence"] = 0.5
+    return payload
 
 
 def _legacy_processed_payload() -> dict[str, object]:
@@ -84,7 +89,7 @@ def _legacy_processed_payload() -> dict[str, object]:
 
 
 def test_contract_fixtures_load_and_preserve_findings() -> None:
-    run = load_processed_data(PROCESSED_FIXTURE)
+    run = ProcessedRun.model_validate(_processed_payload())
     ground_truth = load_ground_truth(GROUND_TRUTH_FIXTURE.read_bytes())
 
     assert len(run.findings) == 7
@@ -226,6 +231,23 @@ def test_evidence_grounded_statuses_are_valid_in_schema_1_1_fixture() -> None:
         "NOT_APPLICABLE",
         "NOT_APPLICABLE",
     ]
+    grounded = [
+        finding.ai
+        for finding in run.findings
+        if finding.ai.grounding_status.value == "GROUNDED"
+    ]
+    assert {ai.label.value for ai in grounded} == {"VULNERABLE", "SAFE"}
+    assert all(ai.confidence is not None for ai in grounded)
+    assert all(
+        claim.evidence_ids and not claim.reference_ids
+        if claim.claim_type.value == "OBSERVATION"
+        else claim.reference_ids and not claim.evidence_ids
+        for ai in grounded
+        for claim in ai.claims
+    )
+    assert {ai.provenance.prompt_version for ai in grounded if ai.provenance} == {
+        "triage-report-v5"
+    }
 
 
 @pytest.mark.parametrize(

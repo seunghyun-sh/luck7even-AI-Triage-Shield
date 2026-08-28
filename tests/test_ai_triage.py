@@ -8,9 +8,9 @@ import pytest
 from openai import APIConnectionError, APITimeoutError, RateLimitError
 from pydantic import ValidationError
 
-from analysis.ai_triage import ProviderAnalysis, ProviderClaim, SQLiteCache, triage
+from analysis.ai_triage import ProviderAnalysis, SQLiteCache, triage
 from analysis.knowledge_base import KnowledgeBaseManifest
-from analysis.models import AiClaimType, ProcessedRun, RawRun
+from analysis.models import AiLabel, ProcessedRun, RawRun
 
 NOW = datetime(2026, 8, 28, tzinfo=timezone.utc)
 
@@ -145,9 +145,9 @@ class FakeClient:
         self.responses = FakeResponses(outcomes, parse_outcomes)
 
 
-def provider_response(claims, retrieved=("file_1",), cited=("file_1",)):
+def provider_response(analysis, retrieved=("file_1",), cited=("file_1",)):
     return SimpleNamespace(
-        output_parsed=ProviderAnalysis(claims=claims),
+        output_parsed=analysis,
         status="completed",
         output=[
             SimpleNamespace(
@@ -179,29 +179,41 @@ def provider_response(claims, retrieved=("file_1",), cited=("file_1",)):
     )
 
 
-def valid_claims(*, evidence_id="E1", reference_id="file_1"):
-    return [
-        ProviderClaim(
-            claim_type=kind,
-            text=kind.value,
-            evidence_ids=[evidence_id],
-            reference_file_ids=[]
-            if kind is AiClaimType.OBSERVATION
-            else [reference_id],
-        )
-        for kind in AiClaimType
-    ]
+def valid_analysis(
+    *,
+    label="INCONCLUSIVE",
+    confidence=0.5,
+    evidence_id="E1",
+    reference_id="file_1",
+):
+    return ProviderAnalysis.model_validate(
+        {
+            "label": AiLabel(label),
+            "confidence": confidence,
+            "observation": {"text": "Observation", "evidence_ids": [evidence_id]},
+            "impact": {"text": "Impact", "reference_file_ids": [reference_id]},
+            "recommendation": {
+                "text": "Recommendation",
+                "reference_file_ids": [reference_id],
+            },
+            "manual_check": {
+                "text": "Manual check",
+                "reference_file_ids": [reference_id],
+            },
+        }
+    )
 
 
 def candidate(monkeypatch, client, run=None, manifest=None, **kwargs):
     monkeypatch.setenv("AI_TRIAGE_MODEL", "test-model")
     cache = kwargs.pop("cache", {})
+    now = kwargs.pop("now", lambda: NOW)
     return triage(
         run or raw_run(raw_finding()),
         client=client,
         knowledge_base=manifest or kb(),
         cache=cache,
-        now=lambda: NOW,
+        now=now,
         **kwargs,
     )
 
@@ -222,7 +234,7 @@ def provider_error(error_type):
 
 
 def test_mixed_scan_result_is_partial_and_failed_scan_is_not_requested(monkeypatch):
-    client = FakeClient(provider_response(valid_claims()))
+    client = FakeClient(provider_response(valid_analysis()))
     result = candidate(
         monkeypatch,
         client,
@@ -238,7 +250,67 @@ def test_mixed_scan_result_is_partial_and_failed_scan_is_not_requested(monkeypat
         "NOT_REQUESTED",
         "SCAN_FAILED",
     )
+    assert failed.ai.needs_human_review is True
     assert len(client.responses.create_calls) == len(client.responses.parse_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("vuln_type", "label", "confidence", "evidence_summary"),
+    [
+        ("XSS", "SAFE", 0.91, "Payload is escaped as text and cannot execute."),
+        (
+            "SQLI",
+            "VULNERABLE",
+            0.93,
+            "Database error and boolean differential observed.",
+        ),
+        ("XSS", "INCONCLUSIVE", 0.5, "Payload reflection context is unavailable."),
+    ],
+)
+def test_grounded_advisory_label_and_confidence_are_preserved(
+    monkeypatch, vuln_type, label, confidence, evidence_summary
+):
+    result = candidate(
+        monkeypatch,
+        FakeClient(
+            provider_response(valid_analysis(label=label, confidence=confidence))
+        ),
+        raw_run(raw_finding(vuln_type=vuln_type, evidence_summary=evidence_summary)),
+        manifest=kb(vuln_types=(vuln_type,)),
+    )
+    ai = result.findings[0].ai
+    assert (ai.label.value, ai.confidence, ai.needs_human_review) == (
+        label,
+        confidence,
+        True,
+    )
+    assert [claim.claim_id for claim in ai.claims] == ["C1", "C2", "C3", "C4"]
+
+
+def test_safe_rule_is_not_requested_without_human_review(monkeypatch):
+    client = FakeClient(AssertionError("provider must not be called"))
+    result = candidate(
+        monkeypatch,
+        client,
+        raw_run(raw_finding(label="SAFE")),
+    )
+    ai = result.findings[0].ai
+    assert (ai.status_reason.value, ai.needs_human_review) == (
+        "RULE_NOT_SUSPECTED",
+        False,
+    )
+    assert not client.responses.calls
+
+
+def test_processed_completion_uses_ai_completion_time(monkeypatch):
+    completed = datetime(2026, 8, 28, 0, 1, tzinfo=timezone.utc)
+    result = candidate(
+        monkeypatch,
+        FakeClient(provider_response(valid_analysis())),
+        now=lambda: completed,
+    )
+    assert result.completed_at == completed
+    assert result.completed_at > result.findings[0].scanned_at
 
 
 def test_empty_and_all_failed_runs_are_failed_and_processed_11_requires_role():
@@ -255,13 +327,13 @@ def test_completed_empty_retrieval_is_insufficient_even_with_a_citation(
     monkeypatch,
 ):
     result = candidate(
-        monkeypatch, FakeClient(provider_response(valid_claims(), (), ("file_1",)))
+        monkeypatch, FakeClient(provider_response(valid_analysis(), (), ("file_1",)))
     )
     assert result.findings[0].ai.grounding_status.value == "INSUFFICIENT"
 
 
 def test_retrieved_and_cited_file_outside_manifest_is_reference_mismatch(monkeypatch):
-    claims = valid_claims(reference_id="untrusted")
+    claims = valid_analysis(reference_id="untrusted")
     result = candidate(
         monkeypatch,
         FakeClient(provider_response(claims, ("untrusted",), ("untrusted",))),
@@ -272,25 +344,32 @@ def test_retrieved_and_cited_file_outside_manifest_is_reference_mismatch(monkeyp
 def test_trusted_reference_for_wrong_vulnerability_is_reference_mismatch(monkeypatch):
     result = candidate(
         monkeypatch,
-        FakeClient(provider_response(valid_claims())),
+        FakeClient(provider_response(valid_analysis())),
         manifest=kb(vuln_types=("SQLI",)),
     )
     assert result.findings[0].ai.error.code == "AI_REFERENCE_MISMATCH"
 
 
 @pytest.mark.parametrize(
-    "claims", [valid_claims(evidence_id="E99"), valid_claims()[:-1]]
+    "analysis",
+    [
+        {
+            **valid_analysis().model_dump(),
+            "observation": {"text": "Observation", "evidence_ids": ["E99"]},
+        },
+        {"label": "SAFE", "confidence": 0.8},
+    ],
 )
-def test_invalid_evidence_or_missing_claim_type_is_schema_invalid(monkeypatch, claims):
-    result = candidate(monkeypatch, FakeClient(provider_response(claims)))
+def test_invalid_fixed_output_schema_is_isolated(monkeypatch, analysis):
+    result = candidate(monkeypatch, FakeClient(provider_response(analysis)))
     assert result.findings[0].ai.error.code == "AI_SCHEMA_INVALID"
 
 
 def test_duplicate_provider_ids_are_isolated_as_schema_invalid(monkeypatch):
-    claims = valid_claims()
-    claims[0].evidence_ids = ["E1", "E1"]
+    analysis = valid_analysis().model_dump()
+    analysis["observation"]["evidence_ids"] = ["E1", "E1"]
 
-    result = candidate(monkeypatch, FakeClient(provider_response(claims)))
+    result = candidate(monkeypatch, FakeClient(provider_response(analysis)))
 
     assert result.findings[0].ai.error.code == "AI_SCHEMA_INVALID"
 
@@ -307,10 +386,10 @@ def test_timeout_retries_three_times_without_exposing_raw_message(monkeypatch):
 
 
 def test_synthesis_transient_retries_the_entire_two_step_flow(monkeypatch):
-    retrieval = [provider_response(valid_claims()) for _ in range(2)]
+    retrieval = [provider_response(valid_analysis()) for _ in range(2)]
     client = FakeClient(
         retrieval,
-        [provider_error(APITimeoutError), provider_response(valid_claims())],
+        [provider_error(APITimeoutError), provider_response(valid_analysis())],
     )
     sleeps = []
     result = candidate(monkeypatch, client, sleeper=sleeps.append)
@@ -329,7 +408,7 @@ def test_retry_after_is_capped_and_deadline_prevents_a_retry(monkeypatch):
     sleeps = []
     recovered = candidate(
         monkeypatch,
-        FakeClient([rate_limited, provider_response(valid_claims())]),
+        FakeClient([rate_limited, provider_response(valid_analysis())]),
         sleeper=sleeps.append,
     )
     assert sleeps == [10.0]
@@ -368,7 +447,7 @@ def test_provider_failure_classes_are_isolated(
 
 
 def test_prompts_have_vulnerability_focus_and_input_excludes_url_secrets(monkeypatch):
-    xss_client = FakeClient(provider_response(valid_claims()))
+    xss_client = FakeClient(provider_response(valid_analysis()))
     candidate(monkeypatch, xss_client)
     xss = xss_client.responses.calls[0]
     assert "reflection" in xss["instructions"] and "context" in xss["instructions"]
@@ -379,7 +458,7 @@ def test_prompts_have_vulnerability_focus_and_input_excludes_url_secrets(monkeyp
         and "token=" not in xss["input"]
         and "topsecret" not in xss["input"]
     )
-    sqli_client = FakeClient(provider_response(valid_claims()))
+    sqli_client = FakeClient(provider_response(valid_analysis()))
     candidate(monkeypatch, sqli_client, raw_run(raw_finding(vuln_type="SQLI")))
     instructions = sqli_client.responses.calls[0]["instructions"]
     assert (
@@ -393,7 +472,9 @@ def test_raw_scan_facts_are_preserved_exactly(monkeypatch):
     run = raw_run(
         raw_finding(reason="Case Sensitive", evidence_summary="Exact evidence")
     )
-    result = candidate(monkeypatch, FakeClient(provider_response(valid_claims())), run)
+    result = candidate(
+        monkeypatch, FakeClient(provider_response(valid_analysis())), run
+    )
     original, output = run.findings[0], result.findings[0]
     assert (output.case_id, output.finding_id, output.scanned_at, output.vuln_type) == (
         original.case_id,
@@ -409,7 +490,7 @@ def test_cache_hit_skips_provider_and_invalid_cached_results_are_not_success(
 ):
     cache = {}
     monkeypatch.setenv("AI_TRIAGE_MODEL", "test-model")
-    first = FakeClient(provider_response(valid_claims()))
+    first = FakeClient(provider_response(valid_analysis()))
     run = raw_run(raw_finding())
     triage(run, client=first, knowledge_base=kb(), cache=cache, now=lambda: NOW)
     assert (
@@ -432,7 +513,7 @@ def test_cache_hit_skips_provider_and_invalid_cached_results_are_not_success(
             if isinstance(mutation, str)
             else {**cached, "result": {**cached["result"], **mutation}}
         )
-        replacement = FakeClient(provider_response(valid_claims()))
+        replacement = FakeClient(provider_response(valid_analysis()))
         result = triage(
             run, client=replacement, knowledge_base=kb(), cache=cache, now=lambda: NOW
         )
@@ -457,7 +538,7 @@ def test_cache_hit_skips_provider_and_invalid_cached_results_are_not_success(
         },
     }
     cache[key] = poisoned
-    replacement = FakeClient(provider_response(valid_claims()))
+    replacement = FakeClient(provider_response(valid_analysis()))
     result = triage(
         run, client=replacement, knowledge_base=kb(), cache=cache, now=lambda: NOW
     )
@@ -473,7 +554,7 @@ def test_cache_key_changes_and_failures_are_not_cached(monkeypatch):
     monkeypatch.setenv("AI_TRIAGE_MODEL", "model-a")
     cache, client = (
         {},
-        FakeClient([provider_response(valid_claims()) for _ in range(5)]),
+        FakeClient([provider_response(valid_analysis()) for _ in range(5)]),
     )
     run = raw_run(raw_finding())
     for model, manifest, subject in [
@@ -507,7 +588,7 @@ def test_cache_key_changes_and_failures_are_not_cached(monkeypatch):
 
 
 def test_responses_file_search_contract_is_split(monkeypatch):
-    client = FakeClient(provider_response(valid_claims()))
+    client = FakeClient(provider_response(valid_analysis()))
     candidate(monkeypatch, client)
     params = client.responses.create_calls[0]
     assert set(params) == {
@@ -540,14 +621,14 @@ def test_responses_file_search_contract_is_split(monkeypatch):
 
 def test_naive_now_is_schema_invalid(monkeypatch):
     monkeypatch.setenv("AI_TRIAGE_MODEL", "test-model")
-    result = triage(
-        raw_run(raw_finding()),
-        client=FakeClient(provider_response(valid_claims())),
-        knowledge_base=kb(),
-        cache={},
-        now=lambda: NOW.replace(tzinfo=None),
-    )
-    assert result.findings[0].ai.error.code == "AI_SCHEMA_INVALID"
+    with pytest.raises(ValidationError, match="timezone offset"):
+        triage(
+            raw_run(raw_finding()),
+            client=FakeClient(provider_response(valid_analysis())),
+            knowledge_base=kb(),
+            cache={},
+            now=lambda: NOW.replace(tzinfo=None),
+        )
 
 
 def test_no_candidate_path_needs_no_provider_or_configuration(monkeypatch):
@@ -575,7 +656,7 @@ def test_untrusted_input_is_json_bounded_and_redacts_multiline_credentials(monke
         "password=hunter2\nCookie: sid=secret\nAuthorization: Bearer abc.def\n"
         "csrf_token=csrf-secret api_key=key-secret " + ("inject\n" * 4000)
     )
-    client = FakeClient(provider_response(valid_claims()))
+    client = FakeClient(provider_response(valid_analysis()))
     candidate(
         monkeypatch,
         client,
@@ -604,7 +685,7 @@ def test_file_search_lifecycle_is_required(
     monkeypatch, response_status, call_status, calls, expected
 ):
     response = provider_response(
-        [] if expected == "INSUFFICIENT" else valid_claims(),
+        [] if expected == "INSUFFICIENT" else valid_analysis(),
         () if expected == "INSUFFICIENT" else ("file_1",),
     )
     response.status = response_status
@@ -620,28 +701,28 @@ def test_file_search_lifecycle_is_required(
 
 
 def test_direct_sdk_annotation_shape_is_a_citation(monkeypatch):
-    response = provider_response(valid_claims())
+    response = provider_response(valid_analysis())
     response.output[1].content[0].annotations = [SimpleNamespace(file_id="file_1")]
     result = candidate(monkeypatch, FakeClient(response)).findings[0].ai
     assert result.grounding_status.value == "GROUNDED"
 
 
 def test_nonempty_retrieval_without_output_text_citation_fails(monkeypatch):
-    response = provider_response(valid_claims())
+    response = provider_response(valid_analysis())
     response.output[1].content[0].annotations = []
     result = candidate(monkeypatch, FakeClient(response)).findings[0].ai
     assert result.error.code == "AI_TOOL_FAILED"
 
 
 def test_synthesis_cannot_hallucinate_retrieved_file_id(monkeypatch):
-    response = provider_response(valid_claims(reference_id="file_fake"))
+    response = provider_response(valid_analysis(reference_id="file_fake"))
     result = candidate(monkeypatch, FakeClient(response)).findings[0].ai
     assert result.error.code == "AI_REFERENCE_MISMATCH"
 
 
 def test_uncited_retrieval_passage_never_reaches_synthesis(monkeypatch):
     response = provider_response(
-        valid_claims(),
+        valid_analysis(),
         retrieved=("file_1", "file_uncited"),
         cited=("file_1",),
     )
@@ -658,7 +739,7 @@ def test_uncited_retrieval_passage_never_reaches_synthesis(monkeypatch):
 def test_missing_model_with_injected_dependencies_is_isolated(monkeypatch):
     monkeypatch.delenv("AI_TRIAGE_MODEL", raising=False)
     monkeypatch.setattr("analysis.ai_triage._load_environment", lambda: None)
-    client = FakeClient(provider_response(valid_claims()))
+    client = FakeClient(provider_response(valid_analysis()))
 
     result = triage(
         raw_run(raw_finding()),
@@ -673,7 +754,7 @@ def test_missing_model_with_injected_dependencies_is_isolated(monkeypatch):
 
 def test_manifest_digest_invalidates_same_version_cache(monkeypatch):
     cache = {}
-    first = FakeClient(provider_response(valid_claims()))
+    first = FakeClient(provider_response(valid_analysis()))
     candidate(monkeypatch, first, cache=cache, manifest=kb("kb1"))
     changed = kb("kb1").model_copy(
         update={
@@ -682,7 +763,7 @@ def test_manifest_digest_invalidates_same_version_cache(monkeypatch):
             ]
         }
     )
-    second = FakeClient(provider_response(valid_claims()))
+    second = FakeClient(provider_response(valid_analysis()))
     candidate(monkeypatch, second, cache=cache, manifest=changed)
     assert len(first.responses.create_calls) == len(second.responses.create_calls) == 1
 
@@ -693,7 +774,9 @@ def test_cache_write_error_cannot_fail_valid_provider_result(monkeypatch):
             raise OSError("disk full")
 
     result = candidate(
-        monkeypatch, FakeClient(provider_response(valid_claims())), cache=BrokenCache()
+        monkeypatch,
+        FakeClient(provider_response(valid_analysis())),
+        cache=BrokenCache(),
     )
     assert result.findings[0].ai.grounding_status.value == "GROUNDED"
 
