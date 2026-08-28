@@ -85,12 +85,13 @@ def _validate_identifier(value: str, field_name: str) -> str:
 class RunRequest(_ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     target_set_id: str = Field(min_length=1)
+    deployment_id: str = Field(min_length=1)
     vuln_types: list[Literal["XSS", "SQLI"]] = Field(min_length=1)
 
-    @field_validator("target_set_id")
+    @field_validator("target_set_id", "deployment_id")
     @classmethod
-    def target_set_id_must_not_be_blank(cls, value: str) -> str:
-        return _validate_identifier(value, "target_set_id")
+    def request_identifiers_must_be_valid(cls, value: str, info: Any) -> str:
+        return _validate_identifier(value, info.field_name)
 
     @field_validator("vuln_types")
     @classmethod
@@ -121,6 +122,7 @@ class RunStatusDocument(_ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     scan_run_id: str
     target_set_id: str = Field(min_length=1)
+    deployment_id: str = Field(min_length=1)
     requested_vuln_types: list[Literal["XSS", "SQLI"]] = Field(min_length=1)
     status: ExecutionStatus
     stage: ExecutionStage | None
@@ -137,10 +139,10 @@ class RunStatusDocument(_ContractModel):
     def scan_run_id_must_be_valid(cls, value: str) -> str:
         return _validate_run_id(value)
 
-    @field_validator("target_set_id")
+    @field_validator("target_set_id", "deployment_id")
     @classmethod
-    def status_target_set_id_must_not_be_blank(cls, value: str) -> str:
-        return _validate_identifier(value, "target_set_id")
+    def status_identifiers_must_be_valid(cls, value: str, info: Any) -> str:
+        return _validate_identifier(value, info.field_name)
 
     @field_validator("requested_vuln_types")
     @classmethod
@@ -161,7 +163,9 @@ class RunStatusDocument(_ContractModel):
 
     @field_validator("started_at", "updated_at", "completed_at")
     @classmethod
-    def timestamps_must_be_timezone_aware(cls, value: datetime | None) -> datetime | None:
+    def timestamps_must_be_timezone_aware(
+        cls, value: datetime | None
+    ) -> datetime | None:
         if value is not None and (value.tzinfo is None or value.utcoffset() is None):
             raise ValueError("timestamps must include a timezone offset")
         return value
@@ -190,7 +194,9 @@ class RunStatusDocument(_ContractModel):
                 raise ValueError("terminal statuses require completed_at")
         else:
             if self.completed_at is not None:
-                raise ValueError("non-terminal statuses require completed_at to be null")
+                raise ValueError(
+                    "non-terminal statuses require completed_at to be null"
+                )
 
         if self.status is ExecutionStatus.QUEUED and self.stage is not None:
             raise ValueError("QUEUED status requires stage to be null")
@@ -200,7 +206,9 @@ class RunStatusDocument(_ContractModel):
             self.status in {ExecutionStatus.COMPLETED, ExecutionStatus.PARTIAL}
             and self.processed_result_path is None
         ):
-            raise ValueError("COMPLETED and PARTIAL statuses require processed_result_path")
+            raise ValueError(
+                "COMPLETED and PARTIAL statuses require processed_result_path"
+            )
         if (
             self.status in {ExecutionStatus.COMPLETED, ExecutionStatus.PARTIAL}
             and self.raw_result_path is None

@@ -136,10 +136,7 @@ class PipelineLock:
             return None
         try:
             created_at_value = datetime.fromisoformat(created_at)
-            if (
-                created_at_value.tzinfo is None
-                or created_at_value.utcoffset() is None
-            ):
+            if created_at_value.tzinfo is None or created_at_value.utcoffset() is None:
                 return None
             return {
                 "pid": pid,
@@ -182,6 +179,7 @@ class RunStore:
         status = RunStatusDocument(
             scan_run_id=scan_run_id,
             target_set_id=request.target_set_id,
+            deployment_id=request.deployment_id,
             requested_vuln_types=request.vuln_types,
             status=ExecutionStatus.QUEUED,
             stage=None,
@@ -240,6 +238,7 @@ class RunStore:
         request = self.load_request(scan_run_id)
         if (
             status.target_set_id != request.target_set_id
+            or status.deployment_id != request.deployment_id
             or status.requested_vuln_types != request.vuln_types
         ):
             raise ValueError("Run status does not match its request.")
@@ -358,10 +357,7 @@ class RunStore:
             return None
         try:
             created_at_value = datetime.fromisoformat(created_at)
-            if (
-                created_at_value.tzinfo is None
-                or created_at_value.utcoffset() is None
-            ):
+            if created_at_value.tzinfo is None or created_at_value.utcoffset() is None:
                 return None
             return {
                 "pid": pid,
@@ -400,9 +396,7 @@ class RunStore:
         scan_run_id = self._validate_artifact_identity(
             processed_run.scan_run_id, processed_run.target_set_id
         )
-        path = self._contained_artifact_path(
-            "processed", scan_run_id, "results.json"
-        )
+        path = self._contained_artifact_path("processed", scan_run_id, "results.json")
         self._atomic_write_json(path, processed_run.model_dump(mode="json"))
         return f"processed/{scan_run_id}/results.json"
 
@@ -420,15 +414,14 @@ class RunStore:
         if (
             status.scan_run_id != scan_run_id
             or status.target_set_id != request.target_set_id
+            or status.deployment_id != request.deployment_id
             or status.status not in {ExecutionStatus.COMPLETED, ExecutionStatus.PARTIAL}
             or status.processed_result_path != expected_path
         ):
             raise ValueError("Run artifacts are not available for review.")
 
         try:
-            canonical_path = (
-                self.data_root / "processed" / scan_run_id / "results.json"
-            )
+            canonical_path = self.data_root / "processed" / scan_run_id / "results.json"
             if canonical_path.is_symlink():
                 raise ValueError
             path = self._contained_artifact_path(
@@ -448,9 +441,7 @@ class RunStore:
             raise ValueError("Run artifacts are not available for review.")
         return processed_run
 
-    def _validate_artifact_identity(
-        self, scan_run_id: str, target_set_id: str
-    ) -> str:
+    def _validate_artifact_identity(self, scan_run_id: str, target_set_id: str) -> str:
         scan_run_id = _validate_run_id(scan_run_id)
         request = self.load_request(scan_run_id)
         if request.target_set_id != target_set_id:
@@ -528,7 +519,10 @@ class RunStore:
             ExecutionStage.SCANNING_SQLI: "SQLI",
         }
         required_type = unavailable_stages.get(current.stage)
-        if required_type is not None and required_type not in current.requested_vuln_types:
+        if (
+            required_type is not None
+            and required_type not in current.requested_vuln_types
+        ):
             raise ValueError("Run stage was not requested.")
 
         stage_order = {
@@ -559,7 +553,9 @@ class RunStore:
         temporary_path = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
         try:
             with temporary_path.open("x", encoding="utf-8") as artifact:
-                json.dump(payload, artifact, ensure_ascii=False, indent=2, sort_keys=True)
+                json.dump(
+                    payload, artifact, ensure_ascii=False, indent=2, sort_keys=True
+                )
                 artifact.write("\n")
                 artifact.flush()
                 os.fsync(artifact.fileno())

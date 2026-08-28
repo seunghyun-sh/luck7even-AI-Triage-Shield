@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +22,11 @@ from analysis.models import (
     TargetManifest,
 )
 
+from .deployment_registry import (
+    DeploymentRegistryError,
+    deployment_manifest_lease,
+    resolve_deployment_manifest,
+)
 from .models import (
     ExecutionStage,
     ExecutionStatus,
@@ -30,7 +36,7 @@ from .models import (
     RunStatusDocument,
 )
 from .run_store import RunAlreadyActiveError, RunStore
-from .target_registry import TargetRegistryError, load_registered_target
+from .target_registry import TargetRegistryError
 
 ProgressCallback: TypeAlias = Callable[[int, int], None]
 AuthProfileResolver: TypeAlias = Callable[[str], Mapping[str, str]]
@@ -81,7 +87,7 @@ class PipelineOrchestrator:
         xss_scanner: Scanner,
         sqli_scanner: Scanner,
         triage: Triage,
-        manifest_resolver: ManifestResolver = load_registered_target,
+        manifest_resolver: ManifestResolver = resolve_deployment_manifest,
         auth_profile_resolver: AuthProfileResolver = _unconfigured_auth_profile,
     ) -> None:
         self._store = store
@@ -94,33 +100,57 @@ class PipelineOrchestrator:
     def run(
         self,
         target_set_id: str,
+        deployment_id: str,
         vuln_types: list[str],
         *,
         on_run_created: RunCreatedCallback | None = None,
     ) -> RunStatusDocument:
         """Execute a complete pipeline invocation and return its terminal status."""
 
-        manifest = self._load_manifest(target_set_id)
-        try:
-            request = RunRequest(
-                target_set_id=manifest.target_set_id, vuln_types=vuln_types
-            )
-        except ValidationError as error:
-            raise TargetValidationError("Invalid execution request.") from error
-        available_types = {target.vuln_type.value for target in manifest.targets}
-        if not set(request.vuln_types).issubset(available_types):
-            raise TargetValidationError(
-                "The target manifest does not contain every requested vulnerability type."
-            )
-
         status: RunStatusDocument | None = None
+        authorization = (
+            deployment_manifest_lease(deployment_id)
+            if self._manifest_resolver is resolve_deployment_manifest
+            else nullcontext(self._load_manifest(target_set_id, deployment_id))
+        )
         try:
-            status = self._store.create_run(request)
+            with authorization as authorized_manifest:
+                manifest = TargetManifest.model_validate(
+                    authorized_manifest.model_dump(mode="json")
+                )
+                if manifest.target_set_id != target_set_id:
+                    raise TargetValidationError(
+                        "Registered manifest identity does not match request."
+                    )
+                request = RunRequest(
+                    target_set_id=manifest.target_set_id,
+                    deployment_id=deployment_id,
+                    vuln_types=vuln_types,
+                )
+                available_types = {
+                    target.vuln_type.value for target in manifest.targets
+                }
+                if not set(request.vuln_types).issubset(available_types):
+                    raise TargetValidationError(
+                        "The target manifest does not contain every requested vulnerability type."
+                    )
+                status = self._store.create_run(request)
             with self._store.pipeline_lock(status.scan_run_id) as lock:
                 self._store.reconcile_orphaned_runs(lock)
                 if on_run_created is not None:
                     on_run_created(status.scan_run_id)
                 return self._run_locked(status, manifest)
+        except (DeploymentRegistryError, ValidationError) as error:
+            if status is None:
+                raise TargetValidationError(
+                    "Unable to validate the deployment manifest."
+                ) from error
+            return self._save_failure(
+                status.scan_run_id,
+                code="DEPLOYMENT_AUTHORIZATION_FAILED",
+                message="Deployment authorization failed.",
+                retryable=False,
+            )
         except RunAlreadyActiveError:
             if status is None:
                 raise
@@ -150,21 +180,24 @@ class PipelineOrchestrator:
                 retryable=True,
             )
 
-    def _load_manifest(self, target_set_id: str) -> TargetManifest:
+    def _load_manifest(self, target_set_id: str, deployment_id: str) -> TargetManifest:
         try:
-            manifest = self._manifest_resolver(target_set_id)
+            manifest = self._manifest_resolver(deployment_id)
             validated = TargetManifest.model_validate(manifest.model_dump(mode="json"))
             if validated.target_set_id != target_set_id:
                 raise ValueError("Registered manifest identity does not match request.")
             return validated
         except (
             TargetRegistryError,
+            DeploymentRegistryError,
             ValidationError,
             OSError,
             TypeError,
             ValueError,
         ) as error:
-            raise TargetValidationError("Unable to validate the target manifest.") from error
+            raise TargetValidationError(
+                "Unable to validate the target manifest."
+            ) from error
 
     def _run_locked(
         self, initial_status: RunStatusDocument, manifest: TargetManifest
@@ -186,7 +219,9 @@ class PipelineOrchestrator:
                 status, stage=stage, progress=Progress(completed=0, total=0)
             )
             target_cases = [
-                target for target in manifest.targets if target.vuln_type.value == vuln_type
+                target
+                for target in manifest.targets
+                if target.vuln_type.value == vuln_type
             ]
             context = ScanContext(
                 scan_run_id=status.scan_run_id,
@@ -296,14 +331,18 @@ class PipelineOrchestrator:
                 or finding.case_id.startswith(f"{target_id}::")
             }
             if len(matches) != 1:
-                raise ValueError("Scanner returned a finding for an unknown target case.")
+                raise ValueError(
+                    "Scanner returned a finding for an unknown target case."
+                )
             covered.update(matches)
         if covered != target_ids:
             raise ValueError("Scanner omitted one or more requested target cases.")
 
     @staticmethod
     def _raw_status(findings: list[RawFinding]) -> RunStatus:
-        completed = sum(finding.scan.status.value == "COMPLETED" for finding in findings)
+        completed = sum(
+            finding.scan.status.value == "COMPLETED" for finding in findings
+        )
         if completed == 0:
             return RunStatus.FAILED
         if completed == len(findings):
@@ -329,7 +368,10 @@ class PipelineOrchestrator:
 
     @staticmethod
     def _validate_lineage(raw: RawRun, processed: ProcessedRun) -> None:
-        if processed.scan_run_id != raw.scan_run_id or processed.target_set_id != raw.target_set_id:
+        if (
+            processed.scan_run_id != raw.scan_run_id
+            or processed.target_set_id != raw.target_set_id
+        ):
             raise ValueError("Processed run does not match raw run identity.")
         raw_by_id = {finding.finding_id: finding for finding in raw.findings}
         processed_by_id = {
@@ -345,9 +387,13 @@ class PipelineOrchestrator:
                 or processed_finding.scanned_at != raw_finding.scanned_at
                 or processed_finding.scan != raw_finding.scan
             ):
-                raise ValueError("Processed finding lineage does not match raw finding.")
+                raise ValueError(
+                    "Processed finding lineage does not match raw finding."
+                )
 
-    def _update(self, status: RunStatusDocument, **changes: object) -> RunStatusDocument:
+    def _update(
+        self, status: RunStatusDocument, **changes: object
+    ) -> RunStatusDocument:
         updated_at = self._now_after(status.updated_at)
         updated = status.model_copy(
             update={

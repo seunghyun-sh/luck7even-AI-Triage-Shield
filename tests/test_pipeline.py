@@ -31,6 +31,8 @@ from orchestration.models import ExecutionStatus, RunRequest
 from orchestration.pipeline import PipelineOrchestrator, TargetValidationError
 from orchestration.run_store import RunAlreadyActiveError, RunStore
 
+DEPLOYMENT_ID = "local-lab-deployment"
+
 
 def _manifest() -> TargetManifest:
     return TargetManifest(
@@ -69,6 +71,18 @@ def _manifest() -> TargetManifest:
     )
 
 
+def _manifest_resolver(
+    manifest: TargetManifest, received_deployment_ids: list[str] | None = None
+):
+    def resolve(deployment_id: str) -> TargetManifest:
+        if received_deployment_ids is not None:
+            received_deployment_ids.append(deployment_id)
+        assert deployment_id == DEPLOYMENT_ID
+        return manifest
+
+    return resolve
+
+
 def _finding(vuln_type: str, finding_id: str, *, failed: bool = False) -> RawFinding:
     now = datetime.now(timezone.utc)
     request = {
@@ -90,7 +104,11 @@ def _finding(vuln_type: str, finding_id: str, *, failed: bool = False) -> RawFin
                 html_path=None,
             ),
             rule=ScanRule(label=None, reason=None),
-            error={"code": "REQUEST_FAILED", "message": "Request failed.", "retryable": True},
+            error={
+                "code": "REQUEST_FAILED",
+                "message": "Request failed.",
+                "retryable": True,
+            },
         )
     else:
         scan = ScanResult(
@@ -158,9 +176,11 @@ def _triage(raw: RawRun) -> ProcessedRun:
                 ai=ai,
             )
         )
-    status = RunStatus.PARTIAL if any(
-        finding.scan.status is ScanStatus.FAILED for finding in findings
-    ) else RunStatus.COMPLETED
+    status = (
+        RunStatus.PARTIAL
+        if any(finding.scan.status is ScanStatus.FAILED for finding in findings)
+        else RunStatus.COMPLETED
+    )
     return ProcessedRun(
         schema_version="1.0",
         scan_run_id=raw.scan_run_id,
@@ -179,6 +199,7 @@ def _orchestrator(
     triage=_triage,
     *,
     manifest: TargetManifest | None = None,
+    received_deployment_ids: list[str] | None = None,
 ) -> PipelineOrchestrator:
     registered = manifest or _manifest()
     return PipelineOrchestrator(
@@ -186,7 +207,7 @@ def _orchestrator(
         xss_scanner=xss,
         sqli_scanner=sqli,
         triage=triage,
-        manifest_resolver=lambda target_set_id: registered,
+        manifest_resolver=_manifest_resolver(registered, received_deployment_ids),
     )
 
 
@@ -203,11 +224,21 @@ def test_happy_path_publishes_one_to_one_artifacts(tmp_path: Path) -> None:
         return [_finding("SQLI", "sqli-1")]
 
     created: list[str] = []
-    result = _orchestrator(tmp_path, xss, sqli).run(
-        "local-lab-v1", ["XSS", "SQLI"], on_run_created=created.append
+    received_deployment_ids: list[str] = []
+    result = _orchestrator(
+        tmp_path,
+        xss,
+        sqli,
+        received_deployment_ids=received_deployment_ids,
+    ).run(
+        "local-lab-v1",
+        DEPLOYMENT_ID,
+        ["XSS", "SQLI"],
+        on_run_created=created.append,
     )
     assert result.status is ExecutionStatus.COMPLETED
     assert created == [result.scan_run_id]
+    assert received_deployment_ids == [DEPLOYMENT_ID]
     assert (tmp_path / "data" / result.raw_result_path).is_file()
     assert (tmp_path / "data" / result.processed_result_path).is_file()
 
@@ -222,7 +253,9 @@ def test_xss_only_filters_targets_and_skips_sqli(tmp_path: Path) -> None:
     def sqli(targets, context, progress):
         raise AssertionError("SQLI scanner must not be called")
 
-    result = _orchestrator(tmp_path, xss, sqli).run("local-lab-v1", ["XSS"])
+    result = _orchestrator(tmp_path, xss, sqli).run(
+        "local-lab-v1", DEPLOYMENT_ID, ["XSS"]
+    )
     assert result.status is ExecutionStatus.COMPLETED
     assert calls == [["xss-case"]]
 
@@ -231,7 +264,9 @@ def test_requested_type_must_exist_in_authorized_manifest(tmp_path: Path) -> Non
     manifest = _manifest().model_copy(
         update={
             "targets": [
-                target for target in _manifest().targets if target.vuln_type.value == "XSS"
+                target
+                for target in _manifest().targets
+                if target.vuln_type.value == "XSS"
             ]
         }
     )
@@ -242,11 +277,14 @@ def test_requested_type_must_exist_in_authorized_manifest(tmp_path: Path) -> Non
             lambda targets, context, progress: [],
             lambda targets, context, progress: [],
             manifest=manifest,
-        ).run("local-lab-v1", ["SQLI"])
+        ).run("local-lab-v1", DEPLOYMENT_ID, ["SQLI"])
 
 
-def test_unregistered_target_set_is_rejected_before_run_creation(tmp_path: Path) -> None:
-    def missing(target_set_id: str) -> TargetManifest:
+def test_unregistered_target_set_is_rejected_before_run_creation(
+    tmp_path: Path,
+) -> None:
+    def missing(target_set_id: str, deployment_id: str) -> TargetManifest:
+        assert deployment_id == DEPLOYMENT_ID
         raise ValueError("not registered")
 
     orchestrator = PipelineOrchestrator(
@@ -258,7 +296,7 @@ def test_unregistered_target_set_is_rejected_before_run_creation(tmp_path: Path)
     )
 
     with pytest.raises(TargetValidationError):
-        orchestrator.run("unregistered", ["XSS"])
+        orchestrator.run("unregistered", DEPLOYMENT_ID, ["XSS"])
     assert not (tmp_path / "data" / "runs").exists()
 
 
@@ -272,7 +310,11 @@ def test_cli_rejects_arbitrary_manifest_path() -> None:
 def test_run_id_handshake_occurs_only_after_lock_acquisition(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "data")
     active = store.create_run(
-        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id=DEPLOYMENT_ID,
+            vuln_types=["XSS"],
+        )
     )
     created: list[str] = []
     orchestrator = PipelineOrchestrator(
@@ -280,14 +322,19 @@ def test_run_id_handshake_occurs_only_after_lock_acquisition(tmp_path: Path) -> 
         xss_scanner=lambda targets, context, progress: [_finding("XSS", "xss-1")],
         sqli_scanner=lambda targets, context, progress: [],
         triage=_triage,
-        manifest_resolver=lambda target_set_id: _manifest(),
+        manifest_resolver=_manifest_resolver(_manifest()),
     )
 
     with (
         store.pipeline_lock(active.scan_run_id),
         pytest.raises(RunAlreadyActiveError),
     ):
-        orchestrator.run("local-lab-v1", ["XSS"], on_run_created=created.append)
+        orchestrator.run(
+            "local-lab-v1",
+            DEPLOYMENT_ID,
+            ["XSS"],
+            on_run_created=created.append,
+        )
 
     assert created == []
     failed_run_ids = [
@@ -307,7 +354,11 @@ def test_run_reconciles_old_orphan_after_owning_lock_then_completes(
 ) -> None:
     store = RunStore(tmp_path / "data")
     orphan = store.create_run(
-        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id=DEPLOYMENT_ID,
+            vuln_types=["XSS"],
+        )
     )
     observed_owner_statuses: list[ExecutionStatus] = []
 
@@ -321,10 +372,10 @@ def test_run_reconciles_old_orphan_after_owning_lock_then_completes(
         xss_scanner=xss,
         sqli_scanner=lambda targets, context, progress: [],
         triage=_triage,
-        manifest_resolver=lambda target_set_id: _manifest(),
+        manifest_resolver=_manifest_resolver(_manifest()),
     )
 
-    result = orchestrator.run("local-lab-v1", ["XSS"])
+    result = orchestrator.run("local-lab-v1", DEPLOYMENT_ID, ["XSS"])
 
     assert observed_owner_statuses == [ExecutionStatus.RUNNING]
     assert result.status is ExecutionStatus.COMPLETED
@@ -356,7 +407,7 @@ def test_mixed_scan_results_are_partial(tmp_path: Path) -> None:
         tmp_path,
         lambda targets, context, progress: [_finding("XSS", "xss-1")],
         lambda targets, context, progress: [_finding("SQLI", "sqli-1", failed=True)],
-    ).run("local-lab-v1", ["XSS", "SQLI"])
+    ).run("local-lab-v1", DEPLOYMENT_ID, ["XSS", "SQLI"])
     assert result.status is ExecutionStatus.PARTIAL
     assert result.processed_result_path is not None
 
@@ -366,7 +417,7 @@ def test_scanner_must_cover_every_requested_target(tmp_path: Path) -> None:
         tmp_path,
         lambda targets, context, progress: [],
         lambda targets, context, progress: [_finding("SQLI", "sqli-1")],
-    ).run("local-lab-v1", ["XSS", "SQLI"])
+    ).run("local-lab-v1", DEPLOYMENT_ID, ["XSS", "SQLI"])
 
     assert result.status is ExecutionStatus.FAILED
     assert result.error is not None
@@ -380,7 +431,7 @@ def test_scanner_rejects_finding_for_unknown_target(tmp_path: Path) -> None:
         tmp_path,
         lambda targets, context, progress: [unknown],
         lambda targets, context, progress: [],
-    ).run("local-lab-v1", ["XSS"])
+    ).run("local-lab-v1", DEPLOYMENT_ID, ["XSS"])
 
     assert result.status is ExecutionStatus.FAILED
     assert result.error is not None
@@ -396,7 +447,7 @@ def test_all_failed_scans_publish_raw_without_calling_triage(tmp_path: Path) -> 
         lambda targets, context, progress: [_finding("XSS", "xss-1", failed=True)],
         lambda targets, context, progress: [_finding("SQLI", "sqli-1", failed=True)],
         no_triage,
-    ).run("local-lab-v1", ["XSS", "SQLI"])
+    ).run("local-lab-v1", DEPLOYMENT_ID, ["XSS", "SQLI"])
     assert result.status is ExecutionStatus.FAILED
     assert result.raw_result_path is not None
     assert result.processed_result_path is None
@@ -406,7 +457,9 @@ def test_scanner_crash_records_safe_failure_and_releases_lock(tmp_path: Path) ->
     def crash(targets, context, progress):
         raise RuntimeError(f"secret payload at {tmp_path}")
 
-    result = _orchestrator(tmp_path, crash, crash).run("local-lab-v1", ["XSS"])
+    result = _orchestrator(tmp_path, crash, crash).run(
+        "local-lab-v1", DEPLOYMENT_ID, ["XSS"]
+    )
     assert result.status is ExecutionStatus.FAILED
     assert result.error is not None
     assert result.error.message == "Pipeline execution failed."
@@ -424,14 +477,20 @@ def test_lineage_mismatch_does_not_publish_processed(tmp_path: Path) -> None:
         lambda targets, context, progress: [_finding("XSS", "xss-1")],
         lambda targets, context, progress: [],
         wrong_lineage,
-    ).run("local-lab-v1", ["XSS"])
+    ).run("local-lab-v1", DEPLOYMENT_ID, ["XSS"])
     assert result.status is ExecutionStatus.FAILED
     assert not list((tmp_path / "data" / "processed").rglob("results.json"))
 
 
 def test_artifact_publication_is_atomic(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "data")
-    run = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
+    run = store.create_run(
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id=DEPLOYMENT_ID,
+            vuln_types=["XSS"],
+        )
+    )
     raw = RawRun(
         schema_version="1.0",
         scan_run_id=run.scan_run_id,
@@ -443,7 +502,10 @@ def test_artifact_publication_is_atomic(tmp_path: Path) -> None:
     )
     relative_path = store.publish_raw(raw)
     artifact = tmp_path / "data" / relative_path
-    assert json.loads(artifact.read_text(encoding="utf-8"))["scan_run_id"] == run.scan_run_id
+    assert (
+        json.loads(artifact.read_text(encoding="utf-8"))["scan_run_id"]
+        == run.scan_run_id
+    )
     assert not list(artifact.parent.glob("*.tmp"))
 
 
@@ -452,7 +514,11 @@ def test_artifact_publication_rejects_unsafe_or_mismatched_identity(
 ) -> None:
     store = RunStore(tmp_path / "data")
     run = store.create_run(
-        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id=DEPLOYMENT_ID,
+            vuln_types=["XSS"],
+        )
     )
     raw = RawRun(
         schema_version="1.0",
@@ -477,7 +543,7 @@ def test_invalid_progress_records_failure_and_releases_lock(tmp_path: Path) -> N
 
     result = _orchestrator(
         tmp_path, invalid_progress, lambda targets, context, progress: []
-    ).run("local-lab-v1", ["XSS"])
+    ).run("local-lab-v1", DEPLOYMENT_ID, ["XSS"])
     assert result.status is ExecutionStatus.FAILED
     assert not RunStore(tmp_path / "data").pipeline_lock_active()
 

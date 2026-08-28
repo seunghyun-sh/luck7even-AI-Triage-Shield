@@ -26,6 +26,7 @@ from analysis.models import (
     TargetCase,
     VulnType,
 )
+from scanners import base
 
 DB_ERROR_KEYWORDS = [
     "you have an error in your sql syntax",
@@ -79,16 +80,37 @@ def _build_fields(target: TargetCase, attack_value: str) -> dict:
     return fields
 
 
-def _send(client, method: str, url: str, location: str, fields: dict,
-          timeout_seconds: int, follow_redirects: bool):
-    kwargs = {"timeout": timeout_seconds, "allow_redirects": follow_redirects}
+def _send(
+    client,
+    method: str,
+    url: str,
+    location: str,
+    fields: dict,
+    timeout_seconds: int,
+    follow_redirects: bool,
+):
+    kwargs = {}
     if location == "json":
         kwargs["json"] = fields
     elif location == "form":
         kwargs["data"] = fields
     else:
         kwargs["params"] = fields
-    return client.post(url, **kwargs) if method == "POST" else client.get(url, **kwargs)
+    if follow_redirects:
+        return base.safe_request(
+            client,
+            method,
+            url,
+            timeout=timeout_seconds,
+            **kwargs,
+        )
+    request_method = client.post if method == "POST" else client.get
+    return request_method(
+        url,
+        timeout=timeout_seconds,
+        allow_redirects=False,
+        **kwargs,
+    )
 
 
 def load_payload_profile(profile_id: str, payloads_dir: Path) -> list[dict]:
@@ -102,8 +124,9 @@ def load_payload_profile(profile_id: str, payloads_dir: Path) -> list[dict]:
     return data["payloads"]
 
 
-def _failed_finding(case_id: str, request: ScanRequest, code: str, message: str,
-                     retryable: bool = True) -> RawFinding:
+def _failed_finding(
+    case_id: str, request: ScanRequest, code: str, message: str, retryable: bool = True
+) -> RawFinding:
     return RawFinding(
         case_id=case_id,
         finding_id=_new_finding_id(),
@@ -113,8 +136,11 @@ def _failed_finding(case_id: str, request: ScanRequest, code: str, message: str,
             status=ScanStatus.FAILED,
             request=request,
             response=ScanResponse(
-                http_status=None, elapsed_ms=None, baseline_elapsed_ms=None,
-                evidence_summary=None, html_path=None,
+                http_status=None,
+                elapsed_ms=None,
+                baseline_elapsed_ms=None,
+                evidence_summary=None,
+                html_path=None,
             ),
             rule=ScanRule(label=None, reason=None),
             error=ErrorDetail(code=code, message=message, retryable=retryable),
@@ -140,28 +166,45 @@ def evaluate_single_payload(
     baseline_value = _baseline_value(target)
 
     request = ScanRequest(
-        url=url, method=target.method, input_location=target.input.location,
-        parameter=target.input.attack_parameter, payload=payload_value,
+        url=url,
+        method=target.method,
+        input_location=target.input.location,
+        parameter=target.input.attack_parameter,
+        payload=payload_value,
     )
 
     try:
         baseline_started = time.monotonic()
         baseline_resp = _send(
-            client, target.method, url, target.input.location,
-            _build_fields(target, baseline_value), timeout_seconds, follow_redirects,
+            client,
+            target.method,
+            url,
+            target.input.location,
+            _build_fields(target, baseline_value),
+            timeout_seconds,
+            follow_redirects,
         )
         baseline_elapsed_ms = int((time.monotonic() - baseline_started) * 1000)
 
         started = time.monotonic()
         resp = _send(
-            client, target.method, url, target.input.location,
-            _build_fields(target, payload_value), timeout_seconds, follow_redirects,
+            client,
+            target.method,
+            url,
+            target.input.location,
+            _build_fields(target, payload_value),
+            timeout_seconds,
+            follow_redirects,
         )
         elapsed_ms = int((time.monotonic() - started) * 1000)
     except requests.exceptions.Timeout:
-        return _failed_finding(case_id, request, "SCAN_TIMEOUT", "대상 요청 시간이 초과되었습니다.")
+        return _failed_finding(
+            case_id, request, "SCAN_TIMEOUT", "대상 요청 시간이 초과되었습니다."
+        )
     except requests.exceptions.RequestException:
-        return _failed_finding(case_id, request, "SCAN_REQUEST_FAILED", "대상 요청을 완료하지 못했습니다.")
+        return _failed_finding(
+            case_id, request, "SCAN_REQUEST_FAILED", "대상 요청을 완료하지 못했습니다."
+        )
 
     db_error = _looks_like_db_error(resp.text)
     time_delay = elapsed_ms > baseline_elapsed_ms + TIME_DELAY_MARGIN_MS
@@ -171,25 +214,41 @@ def evaluate_single_payload(
     if db_error:
         label, reason = RuleLabel.SUSPECTED, "DB 오류 메시지가 응답에 노출됨"
     elif time_delay:
-        label, reason = RuleLabel.SUSPECTED, "정상 요청보다 응답이 3초 이상 지연됨(시간 지연 의심)"
+        label, reason = (
+            RuleLabel.SUSPECTED,
+            "정상 요청보다 응답이 3초 이상 지연됨(시간 지연 의심)",
+        )
     elif response_diff:
-        label, reason = RuleLabel.SUSPECTED, f"정상 요청과 응답 길이가 {diff_ratio:.0%} 차이남(응답 차이 의심)"
+        label, reason = (
+            RuleLabel.SUSPECTED,
+            f"정상 요청과 응답 길이가 {diff_ratio:.0%} 차이남(응답 차이 의심)",
+        )
     else:
-        label, reason = RuleLabel.SAFE, "DB 오류·시간 지연·응답 차이 신호가 관찰되지 않음"
+        label, reason = (
+            RuleLabel.SAFE,
+            "DB 오류·시간 지연·응답 차이 신호가 관찰되지 않음",
+        )
 
     finding_id = _new_finding_id()
     html_path = _save_response_html(responses_dir, finding_id, resp.text)
 
     return RawFinding(
-        case_id=case_id, finding_id=finding_id, scanned_at=_now(), vuln_type=VulnType.SQLI,
+        case_id=case_id,
+        finding_id=finding_id,
+        scanned_at=_now(),
+        vuln_type=VulnType.SQLI,
         scan=ScanResult(
-            status=ScanStatus.COMPLETED, request=request,
+            status=ScanStatus.COMPLETED,
+            request=request,
             response=ScanResponse(
-                http_status=resp.status_code, elapsed_ms=elapsed_ms,
+                http_status=resp.status_code,
+                elapsed_ms=elapsed_ms,
                 baseline_elapsed_ms=baseline_elapsed_ms,
-                evidence_summary=reason, html_path=html_path,
+                evidence_summary=reason,
+                html_path=html_path,
             ),
-            rule=ScanRule(label=label, reason=reason), error=None,
+            rule=ScanRule(label=label, reason=reason),
+            error=None,
         ),
     )
 
@@ -213,25 +272,42 @@ def evaluate_boolean_pair_payload(
     combined_payload = f"{true_value} | {false_value}"
 
     request = ScanRequest(
-        url=url, method=target.method, input_location=target.input.location,
-        parameter=target.input.attack_parameter, payload=combined_payload,
+        url=url,
+        method=target.method,
+        input_location=target.input.location,
+        parameter=target.input.attack_parameter,
+        payload=combined_payload,
     )
 
     try:
         started = time.monotonic()
         true_resp = _send(
-            client, target.method, url, target.input.location,
-            _build_fields(target, true_value), timeout_seconds, follow_redirects,
+            client,
+            target.method,
+            url,
+            target.input.location,
+            _build_fields(target, true_value),
+            timeout_seconds,
+            follow_redirects,
         )
         false_resp = _send(
-            client, target.method, url, target.input.location,
-            _build_fields(target, false_value), timeout_seconds, follow_redirects,
+            client,
+            target.method,
+            url,
+            target.input.location,
+            _build_fields(target, false_value),
+            timeout_seconds,
+            follow_redirects,
         )
         elapsed_ms = int((time.monotonic() - started) * 1000)
     except requests.exceptions.Timeout:
-        return _failed_finding(case_id, request, "SCAN_TIMEOUT", "대상 요청 시간이 초과되었습니다.")
+        return _failed_finding(
+            case_id, request, "SCAN_TIMEOUT", "대상 요청 시간이 초과되었습니다."
+        )
     except requests.exceptions.RequestException:
-        return _failed_finding(case_id, request, "SCAN_REQUEST_FAILED", "대상 요청을 완료하지 못했습니다.")
+        return _failed_finding(
+            case_id, request, "SCAN_REQUEST_FAILED", "대상 요청을 완료하지 못했습니다."
+        )
 
     diff_ratio = _response_diff_ratio(true_resp.text, false_resp.text)
     if diff_ratio > BOOLEAN_DIFF_THRESHOLD:
@@ -245,14 +321,21 @@ def evaluate_boolean_pair_payload(
     html_path = _save_response_html(responses_dir, finding_id, true_resp.text)
 
     return RawFinding(
-        case_id=case_id, finding_id=finding_id, scanned_at=_now(), vuln_type=VulnType.SQLI,
+        case_id=case_id,
+        finding_id=finding_id,
+        scanned_at=_now(),
+        vuln_type=VulnType.SQLI,
         scan=ScanResult(
-            status=ScanStatus.COMPLETED, request=request,
+            status=ScanStatus.COMPLETED,
+            request=request,
             response=ScanResponse(
-                http_status=true_resp.status_code, elapsed_ms=elapsed_ms,
+                http_status=true_resp.status_code,
+                elapsed_ms=elapsed_ms,
                 baseline_elapsed_ms=elapsed_ms,
-                evidence_summary=reason, html_path=html_path,
+                evidence_summary=reason,
+                html_path=html_path,
             ),
-            rule=ScanRule(label=label, reason=reason), error=None,
+            rule=ScanRule(label=label, reason=reason),
+            error=None,
         ),
     )

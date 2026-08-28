@@ -119,7 +119,10 @@ Scanner EC2와 S3는 MVP의 필수 구성으로 확정하지 않는다. 로컬 �
 MVP에서는 대시보드 밖에서 `main.py`를 실행한다.
 
 ```bash
-python main.py run --target-set-id local-lab-v1 --types XSS SQLI
+python main.py run \
+  --target-set-id novastream-2 \
+  --deployment-id novastream-aws-mysql-v1 \
+  --types XSS SQLI
 ```
 
 위 명령은 현재 골격이며, 구현 후 다음 순서를 오케스트레이션해야 한다.

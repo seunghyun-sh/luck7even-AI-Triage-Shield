@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import pandas as pd
 import plotly.express as px
@@ -28,13 +29,17 @@ from dashboard.metrics import (
     build_type_counts,
 )
 from dashboard.report_builder import build_excel_report
+from orchestration.deployment_registry import (
+    DEFAULT_DEPLOYMENTS_PATH,
+    DeploymentRegistryError,
+    list_registered_deployments,
+    parse_deployment_descriptor,
+    register_deployment,
+    resolve_deployment_manifest,
+)
 from orchestration.launcher import RunLaunchError, start_run
 from orchestration.preflight import Readiness, run_preflight
 from orchestration.run_store import RunStore
-from orchestration.target_registry import (
-    TargetRegistryError,
-    list_registered_targets,
-)
 
 SAMPLE_PROCESSED = PROJECT_ROOT / "configs" / "triaged-results.example.json"
 SAMPLE_GROUND_TRUTH = PROJECT_ROOT / "configs" / "ground-truth.example.json"
@@ -131,9 +136,17 @@ def _format_metric(value: Any) -> str:
 
 
 def _run_metadata(run: Any) -> dict[str, Any]:
+    deployment_id = None
+    try:
+        request = RUN_STORE.load_request(run.scan_run_id)
+        if request.target_set_id == run.target_set_id:
+            deployment_id = request.deployment_id
+    except (FileNotFoundError, ValueError):
+        pass
     return {
         "scan_run_id": run.scan_run_id,
         "target_set_id": run.target_set_id,
+        "deployment_id": deployment_id,
         "status": run.status.value,
         "started_at": run.started_at.isoformat(),
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
@@ -206,9 +219,7 @@ def _apply_filters(df: pd.DataFrame) -> pd.DataFrame:
     if review != "전체":
         filtered = filtered[filtered["needs_human_review"] == (review == "필요")]
 
-    query = st.sidebar.text_input(
-        "URL · case_id · finding_id 검색", key="filter_query"
-    )
+    query = st.sidebar.text_input("URL · case_id · finding_id 검색", key="filter_query")
     if query:
         mask = (
             filtered["url"].str.contains(query, case=False, na=False, regex=False)
@@ -237,9 +248,7 @@ def _available_processed_results() -> list[Path]:
     def sort_key(path: Path) -> tuple[int, float, str]:
         status = RUN_STORE.load_status(path.parent.name)
         completed_at = (
-            status.completed_at.timestamp()
-            if status.completed_at
-            else float("-inf")
+            status.completed_at.timestamp() if status.completed_at else float("-inf")
         )
         return (
             {"COMPLETED": 0, "PARTIAL": 1}.get(status.status.value, 2),
@@ -307,11 +316,7 @@ def _render_charts(df: pd.DataFrame) -> None:
         else:
             label = _count_label_column(verdict_counts)
             displayed_counts = verdict_counts.assign(
-                **{
-                    label: verdict_counts[label].map(
-                        _display_ai_verdict
-                    )
-                }
+                **{label: verdict_counts[label].map(_display_ai_verdict)}
             )
             st.plotly_chart(
                 _dark_figure(
@@ -367,9 +372,11 @@ def _priority_table(df: pd.DataFrame) -> pd.DataFrame:
         "confidence",
         "needs_human_review",
     ]
-    table = df.assign(_priority=priorities).sort_values(["_priority", "finding_id"])[
-        columns
-    ].copy()
+    table = (
+        df.assign(_priority=priorities)
+        .sort_values(["_priority", "finding_id"])[columns]
+        .copy()
+    )
     for column in (
         "vuln_type",
         "scan_status",
@@ -458,9 +465,7 @@ def _build_filtered_evaluation(
 
     build_evaluation(full_findings, ground_truth)
     filtered_sqli_case_ids = set(
-        filtered_findings.loc[
-            filtered_findings["vuln_type"].eq("SQLI"), "case_id"
-        ]
+        filtered_findings.loc[filtered_findings["vuln_type"].eq("SQLI"), "case_id"]
     )
     filtered_ground_truth = ground_truth.model_copy(
         update={
@@ -572,11 +577,13 @@ def _report_frame(
         validate="one_to_one",
         indicator=True,
     )
-    report.loc[
-        report["_merge"].eq("left_only"), "evaluation_exclusion_reason"
-    ] = "NO_GROUND_TRUTH"
-    report["ground_truth_label"] = report["ground_truth_label"].astype(object).where(
-        report["ground_truth_label"].notna(), None
+    report.loc[report["_merge"].eq("left_only"), "evaluation_exclusion_reason"] = (
+        "NO_GROUND_TRUTH"
+    )
+    report["ground_truth_label"] = (
+        report["ground_truth_label"]
+        .astype(object)
+        .where(report["ground_truth_label"].notna(), None)
     )
     return report.drop(columns="_merge")
 
@@ -600,9 +607,7 @@ def _load_inputs() -> tuple[Any | None, Any | None]:
     if preferred_run_id:
         preferred_path = _safe_processed_path(preferred_run_id)
     default_mode = (
-        "발견된 결과 사용"
-        if preferred_path in available_results
-        else source_modes[0]
+        "발견된 결과 사용" if preferred_path in available_results else source_modes[0]
     )
     if (
         preferred_path in available_results
@@ -670,14 +675,8 @@ def _load_inputs() -> tuple[Any | None, Any | None]:
     return run, ground_truth
 
 
-def _available_target_manifests() -> list[tuple[Path, Any]]:
-    try:
-        return [
-            (target.manifest_path, target.manifest)
-            for target in list_registered_targets()
-        ]
-    except TargetRegistryError:
-        return []
+def _available_deployments() -> list[Any]:
+    return list_registered_deployments(DEFAULT_DEPLOYMENTS_PATH)
 
 
 def _safe_processed_path(scan_run_id: str) -> Path | None:
@@ -707,6 +706,7 @@ def _render_run_status(scan_run_id: str, *, polling: bool) -> None:
     details = {
         "Run ID": status.scan_run_id,
         "Target set": status.target_set_id,
+        "구축환경": status.deployment_id,
         "요청 유형": ", ".join(
             _display_enum("vuln_type", value) for value in status.requested_vuln_types
         ),
@@ -748,8 +748,65 @@ def _clear_run_selection() -> None:
     st.session_state.pop("scan_run_id", None)
 
 
-def _preflight_fingerprint(selected_path: Path, selected_types: list[str]) -> tuple[str, tuple[str, ...]]:
-    return (str(selected_path), tuple(sorted(selected_types)))
+def _preflight_fingerprint(
+    deployment_id: str, deployment_version: str, selected_types: list[str]
+) -> tuple[str, str, tuple[str, ...]]:
+    return (deployment_id, deployment_version, tuple(sorted(selected_types)))
+
+
+def _deployment_origin(base_url: str) -> str:
+    """Display an endpoint origin without credentials, paths, or query data."""
+
+    parsed = urlsplit(base_url)
+    if not parsed.scheme or not parsed.hostname:
+        return "—"
+    origin = f"{parsed.scheme}://{parsed.hostname}"
+    if parsed.port is not None:
+        origin = f"{origin}:{parsed.port}"
+    return origin
+
+
+def _deployment_label(deployment: Any) -> str:
+    return (
+        f"{deployment.display_name} · {deployment.target_set_id} · "
+        f"{deployment.database_engine} · {deployment.lifecycle}"
+    )
+
+
+def _render_deployment_management() -> None:
+    """Render registration controls without exposing descriptor secrets."""
+
+    with st.expander("배포환경 관리"):
+        uploaded = st.file_uploader("Deployment Descriptor JSON", type="json")
+        registration_authorized = st.checkbox(
+            "환경구축팀이 전달한 허가된 격리 진단 환경임을 확인했습니다.",
+            key="deployment_registration_authorized",
+        )
+        if st.button(
+            "배포환경 등록",
+            disabled=uploaded is None or not registration_authorized,
+        ):
+            try:
+                descriptor = parse_deployment_descriptor(uploaded.getvalue())
+                registered = register_deployment(descriptor, DEFAULT_DEPLOYMENTS_PATH)
+            except DeploymentRegistryError as error:
+                st.error(f"배포환경을 등록할 수 없습니다: {error}")
+            else:
+                st.success(f"배포환경을 등록했습니다: {registered.deployment_id}")
+
+        deployments = _available_deployments()
+        if not deployments:
+            st.info(
+                "등록된 배포환경이 없습니다. Descriptor JSON을 업로드하여 등록하세요."
+            )
+            return
+        st.markdown("#### 등록된 배포환경")
+        for deployment in deployments:
+            st.caption(
+                f"{_deployment_label(deployment)} · "
+                f"{_deployment_origin(deployment.base_url)} · "
+                f"버전 {deployment.deployment_version}"
+            )
 
 
 def _render_readiness(preflight: Any) -> None:
@@ -777,14 +834,14 @@ def _render_terminal_status(status: Any) -> None:
     color = {"COMPLETED": "green", "PARTIAL": "orange", "FAILED": "red"}[
         status.status.value
     ]
-    st.markdown(
-        f":{color}-badge[{_display_enum('run_status', status.status.value)}]"
-    )
+    st.markdown(f":{color}-badge[{_display_enum('run_status', status.status.value)}]")
     st.write(status_text)
     _render_run_status(status.scan_run_id, polling=False)
     processed_path = _safe_processed_path(status.scan_run_id)
     if processed_path is not None:
-        label = "이 결과 검토" if status.status.value == "COMPLETED" else "부분 결과 검토"
+        label = (
+            "이 결과 검토" if status.status.value == "COMPLETED" else "부분 결과 검토"
+        )
         st.button(
             label,
             type="primary",
@@ -811,9 +868,7 @@ def _render_execution_tab() -> None:
         except (FileNotFoundError, ValueError):
             st.session_state.pop("scan_run_id", None)
     if status is not None and status.status.value in ACTIVE_STATUSES:
-        st.markdown(
-            f":blue-badge[{_display_enum('run_status', status.status.value)}]"
-        )
+        st.markdown(f":blue-badge[{_display_enum('run_status', status.status.value)}]")
         st.caption("실행 중에는 설정을 변경할 수 없습니다.")
 
         @st.fragment(run_every=2)
@@ -826,21 +881,39 @@ def _render_execution_tab() -> None:
         _render_terminal_status(status)
         return
 
-    manifests = _available_target_manifests()
-    if not manifests:
-        st.error("검증된 대상 manifest가 없습니다.")
+    try:
+        _render_deployment_management()
+        deployments = _available_deployments()
+    except DeploymentRegistryError:
+        st.error(
+            "배포환경 registry를 안전하게 읽을 수 없습니다. "
+            "손상된 설정을 복구하기 전에는 등록과 진단을 진행할 수 없습니다."
+        )
+        return
+    selectable_deployments = [
+        deployment
+        for deployment in deployments
+        if deployment.lifecycle in {"ACTIVE", "TEMPORARY"}
+    ]
+    if not selectable_deployments:
+        st.info("진단하려면 ACTIVE 또는 TEMPORARY 배포환경을 등록하세요.")
         return
 
-    paths = [path for path, _ in manifests]
-    manifest_names = {path: manifest.target_set_id for path, manifest in manifests}
+    deployment_ids = [deployment.deployment_id for deployment in selectable_deployments]
+    deployments_by_id = {
+        deployment.deployment_id: deployment for deployment in selectable_deployments
+    }
     setup_card, readiness_card = st.columns([3, 2])
     with setup_card, st.container(border=True):
-        selected_path = st.selectbox(
-            "허가된 대상 manifest",
-            paths,
-            format_func=lambda path: f"{path.name} · {manifest_names[path]}",
-            key="execution_manifest_path",
+        selected_deployment_id = st.selectbox(
+            "허가된 배포환경",
+            deployment_ids,
+            format_func=lambda deployment_id: _deployment_label(
+                deployments_by_id[deployment_id]
+            ),
+            key="execution_deployment_id",
         )
+        selected_deployment = deployments_by_id[selected_deployment_id]
         selected_types = st.multiselect(
             "진단 유형", ("XSS", "SQLI"), key="execution_types"
         )
@@ -848,7 +921,11 @@ def _render_execution_tab() -> None:
             "격리되고 허가된 진단 환경임을 확인했습니다.",
             key="execution_authorized",
         )
-        fingerprint = _preflight_fingerprint(selected_path, selected_types)
+        fingerprint = _preflight_fingerprint(
+            selected_deployment.deployment_id,
+            selected_deployment.deployment_version,
+            selected_types,
+        )
         cached = st.session_state.get("execution_preflight")
         preflight = (
             cached["result"]
@@ -866,9 +943,17 @@ def _render_execution_tab() -> None:
         else:
             disabled_reason = ""
         if st.button("진단 실행 시작", type="primary", disabled=bool(disabled_reason)):
-            fresh = run_preflight(
-                dict(manifests)[selected_path], selected_types, DATA_ROOT
-            )
+            try:
+                manifest = resolve_deployment_manifest(selected_deployment_id)
+                fresh = run_preflight(
+                    manifest,
+                    selected_types,
+                    DATA_ROOT,
+                    target_identity_verified=True,
+                )
+            except DeploymentRegistryError as error:
+                st.error(f"배포환경을 해석할 수 없습니다: {error}")
+                return
             st.session_state["execution_preflight"] = {
                 "fingerprint": fingerprint,
                 "result": fresh,
@@ -878,7 +963,9 @@ def _render_execution_tab() -> None:
             else:
                 try:
                     st.session_state["scan_run_id"] = start_run(
-                        manifest_names[selected_path], selected_types
+                        selected_deployment.target_set_id,
+                        selected_deployment_id,
+                        selected_types,
                     )
                 except RunLaunchError as error:
                     st.error(str(error))
@@ -889,16 +976,24 @@ def _render_execution_tab() -> None:
     with readiness_card, st.container(border=True):
         st.markdown("#### 실행 준비 상태")
         if st.button("준비 상태 확인/새로고침"):
-            result = run_preflight(
-                dict(manifests)[selected_path], selected_types, DATA_ROOT
-            )
-            st.session_state["execution_preflight"] = {
-                "fingerprint": fingerprint,
-                "result": result,
-            }
-            st.rerun()
+            try:
+                manifest = resolve_deployment_manifest(selected_deployment_id)
+                result = run_preflight(
+                    manifest,
+                    selected_types,
+                    DATA_ROOT,
+                    target_identity_verified=True,
+                )
+            except DeploymentRegistryError as error:
+                st.error(f"배포환경을 해석할 수 없습니다: {error}")
+            else:
+                st.session_state["execution_preflight"] = {
+                    "fingerprint": fingerprint,
+                    "result": result,
+                }
+                st.rerun()
         if preflight is None:
-            st.caption("선택한 manifest와 진단 유형의 준비 상태를 확인하세요.")
+            st.caption("선택한 배포환경과 진단 유형의 준비 상태를 확인하세요.")
         else:
             _render_readiness(preflight)
 
@@ -921,6 +1016,7 @@ def _render_review_tab() -> None:
     header, status = st.columns([5, 1])
     header.text(
         f"Run {metadata['scan_run_id']} · Target {metadata['target_set_id']} · "
+        f"Deployment {metadata['deployment_id'] or '외부 업로드'} · "
         f"시작 {metadata['started_at']} · 완료 {_text(metadata['completed_at'])}"
     )
     status.markdown(
@@ -954,7 +1050,9 @@ def _render_review_tab() -> None:
         )
     filtered = _apply_filters(findings)
     if findings.empty:
-        st.info("이 실행에는 처리된 Finding이 없습니다. 0건 요약과 빈 Excel 초안을 제공합니다.")
+        st.info(
+            "이 실행에는 처리된 Finding이 없습니다. 0건 요약과 빈 Excel 초안을 제공합니다."
+        )
     elif filtered.empty:
         st.info(
             "활성 필터와 일치하는 Finding이 없습니다. 사이드바에서 필터를 초기화하세요."

@@ -11,6 +11,8 @@ from orchestration.models import RunRequest
 from orchestration.preflight import Readiness, run_preflight
 from orchestration.run_store import RunStore
 
+DEPLOYMENT_ID = "local-lab-deployment"
+
 
 def _manifest() -> TargetManifest:
     return TargetManifest(
@@ -124,10 +126,16 @@ def test_preflight_normalizes_arbitrary_component_initialization_error(
     assert "secret" not in scanner.message
 
 
-def test_preflight_blocks_active_lock_without_mutating_owner_state(tmp_path: Path) -> None:
+def test_preflight_blocks_active_lock_without_mutating_owner_state(
+    tmp_path: Path,
+) -> None:
     store = RunStore(tmp_path)
     status = store.create_run(
-        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id=DEPLOYMENT_ID,
+            vuln_types=["XSS"],
+        )
     )
 
     with store.pipeline_lock(status.scan_run_id):
@@ -147,10 +155,16 @@ def test_preflight_blocks_active_lock_without_mutating_owner_state(tmp_path: Pat
         assert store.load_status(status.scan_run_id) == before
 
 
-def test_preflight_ignores_stale_metadata_without_reconciliation(tmp_path: Path) -> None:
+def test_preflight_ignores_stale_metadata_without_reconciliation(
+    tmp_path: Path,
+) -> None:
     store = RunStore(tmp_path)
     status = store.create_run(
-        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id=DEPLOYMENT_ID,
+            vuln_types=["XSS"],
+        )
     )
     lock_path = store.runs_dir / ".pipeline.lock"
     lock_path.write_text(
@@ -201,9 +215,7 @@ def test_preflight_blocks_empty_type_selection(tmp_path: Path) -> None:
     assert "NO_VULN_TYPES" in _codes(result)
 
 
-def test_preflight_blocks_unwritable_data_root(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_preflight_blocks_unwritable_data_root(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("orchestration.preflight.os.access", lambda *args: False)
 
     result = run_preflight(

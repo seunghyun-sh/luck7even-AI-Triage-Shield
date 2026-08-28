@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+configs/deployments.local.json
 
 # Python
 __pycache__/
@@ -17,15 +18,11 @@ venv/
 data/raw/*
 data/processed/*
 data/exports/*
-HEAD
-data/runs/*
-=======
 data/runs/
-origin/feature/dashboard-contracts
+data/cache/
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/exports/.gitkeep
-!data/runs/.gitkeep
 *.db
 *.sqlite
 *.sqlite3

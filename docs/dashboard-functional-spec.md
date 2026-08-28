@@ -4,7 +4,7 @@
 
 이 문서는 `docs/project-flow.md`와 `docs/data-contracts-v1.md`를 기준으로 대시보드 MVP 기능을 정의한다.
 
-대시보드는 스캐너 로직이나 OpenAI 판정 로직을 직접 실행하지 않는다. 허가된 manifest와 유형에 한해 launcher에 실행을 요청하고, `RunStore`의 상태와 파이프라인이 게시한 `COMPLETED` 또는 `PARTIAL` processed JSON을 조회·검토하며 진단 결과 Excel 초안을 생성한다.
+대시보드는 스캐너 로직이나 OpenAI 판정 로직을 직접 실행하지 않는다. 환경구축팀이 비공개 전달한 Deployment Descriptor를 검증·등록하고, 허가된 구축환경과 유형에 한해 launcher에 실행을 요청한다. 이후 `RunStore`의 상태와 파이프라인이 게시한 `COMPLETED` 또는 `PARTIAL` processed JSON을 조회·검토하며 진단 결과 Excel 초안을 생성한다.
 
 ## 2. 주 사용자와 목적
 
@@ -41,11 +41,17 @@ AI 판정과 Excel은 최종 보안 판정이나 프로젝트 결과보고서가
 
 - 최상위 navigation은 session-state key를 가진 `진단 실행`과 `결과 검토` segmented control이다. 첫 방문은 `진단 실행`이며, 선택된 view만 렌더한다.
 - `결과 검토`가 선택되지 않으면 결과 선택 sidebar, 지표, chart, Excel 초안과 결과 검토 입력을 만들지 않는다. `진단 실행`이 선택되지 않으면 preflight를 실행하지 않는다.
-- SETUP 화면은 3:2 card layout이다. 왼쪽은 허가된 manifest, 유형, 허가 확인과 실행 CTA이고 오른쪽은 readiness다.
-- readiness는 명시적인 `준비 상태 확인/새로고침`으로만 실행한다. 선택 manifest 경로와 유형 fingerprint가 같은 결과만 사용하며, 입력 변경 뒤에는 다시 확인해야 한다.
+- SETUP 화면 상단에는 `배포환경 관리` 영역을 두고 Deployment Descriptor JSON 업로드,
+  허가 확인, health identity 검증과 등록 목록을 제공한다. 임의 URL 직접 입력은 제공하지 않는다.
+- SETUP 화면은 3:2 card layout이다. 왼쪽은 허가된 deployment, 유형, 허가 확인과 실행 CTA이고 오른쪽은 readiness다.
+- readiness는 명시적인 `준비 상태 확인/새로고침`으로만 실행한다. 선택
+  `deployment_id`, `deployment_version`, 유형 fingerprint가 같은 결과만 사용하며,
+  입력 변경 뒤에는 다시 확인해야 한다.
 - readiness는 `준비 N · 차단 N`, 차단 항목 우선 compact row, 통과 항목 expander로 표시한다. 실행 직전에도 preflight를 다시 수행하며 READY가 아니면 launcher를 호출하지 않는다.
 - 실행 CTA 아래에는 우선순위에 따라 `유형 미선택`, `허가 미확인`, `준비 확인 필요`, `차단 해결`, `active run` 중 현재 비활성 사유를 한 줄로 표시한다.
-- ACTIVE (`QUEUED`, `RUNNING`)에서는 setup control을 숨기고 RunStore에서 재발견한 run ID, target set, 요청 유형, 상태(각각 `대기`, `실행 중`), stage, progress, updated_at만 읽기 전용으로 표시한다. total이 0이면 `전체 건수 계산 중`으로 표시한다.
+- ACTIVE (`QUEUED`, `RUNNING`)에서는 setup control을 숨기고 RunStore에서 재발견한
+  run ID, target set, deployment ID, 요청 유형, 상태, stage, progress, updated_at을
+  읽기 전용으로 표시한다. total이 0이면 `전체 건수 계산 중`으로 표시한다.
 - TERMINAL은 `COMPLETED`(완료, green), `PARTIAL`(부분 완료, amber), `FAILED`(실패, red)의 의미를 텍스트로 표시한다. 안전한 canonical processed artifact가 있는 COMPLETED에는 `이 결과 검토`, PARTIAL에는 `부분 결과 검토` CTA만 제공한다. CTA는 `scan_run_id`를 persistent review selection state에 저장하고 결과 검토 view로 이동한다.
 - FAILED 또는 artifact unavailable에는 결과 검토 CTA가 없다. `새 진단 준비`는 session의 run selection만 정리하고 RunStore artifact는 삭제하지 않는다. 자동 결과 이동은 하지 않는다.
 - 결과 검토에 active run이 있으면 작은 banner와 `실행 상태 보기` CTA를 표시하되 hidden polling은 하지 않는다.

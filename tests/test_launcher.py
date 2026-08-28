@@ -36,7 +36,9 @@ class FakeProcess:
         return self.returncode
 
 
-def test_start_run_builds_safe_command_handshakes_and_reaps(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_start_run_builds_safe_command_handshakes_and_reaps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     process = FakeProcess(io.StringIO("run-20260827-111500-a1b2c3\nextra output\n"))
     captured: dict[str, object] = {}
 
@@ -47,7 +49,9 @@ def test_start_run_builds_safe_command_handshakes_and_reaps(monkeypatch: pytest.
 
     monkeypatch.setattr(launcher.subprocess, "Popen", popen)
 
-    scan_run_id = launcher.start_run("local-lab-v1", ["XSS", "SQLI"])
+    scan_run_id = launcher.start_run(
+        "local-lab-v1", "local-lab-deployment", ["XSS", "SQLI"]
+    )
 
     assert scan_run_id == "run-20260827-111500-a1b2c3"
     assert captured["command"] == [
@@ -57,6 +61,8 @@ def test_start_run_builds_safe_command_handshakes_and_reaps(monkeypatch: pytest.
         "run",
         "--target-set-id",
         "local-lab-v1",
+        "--deployment-id",
+        "local-lab-deployment",
         "--types",
         "XSS",
         "SQLI",
@@ -72,26 +78,30 @@ def test_start_run_builds_safe_command_handshakes_and_reaps(monkeypatch: pytest.
     assert process.waited.wait(1)
 
 
-def test_start_run_terminates_on_handshake_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_start_run_terminates_on_handshake_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     blocked = threading.Event()
     process = FakeProcess(_BlockingStream(blocked))
     monkeypatch.setattr(launcher, "_HANDSHAKE_TIMEOUT_SECONDS", 0.01)
     monkeypatch.setattr(launcher.subprocess, "Popen", lambda *args, **kwargs: process)
 
     with pytest.raises(launcher.RunLaunchError, match="did not start"):
-        launcher.start_run("local-lab-v1", ["XSS"])
+        launcher.start_run("local-lab-v1", "local-lab-deployment", ["XSS"])
 
     blocked.set()
     assert process.terminated
     assert process.waited.is_set()
 
 
-def test_start_run_rejects_early_failure_without_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_start_run_rejects_early_failure_without_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     process = FakeProcess(io.StringIO(""), returncode=5)
     monkeypatch.setattr(launcher.subprocess, "Popen", lambda *args, **kwargs: process)
 
     with pytest.raises(launcher.RunLaunchError) as error:
-        launcher.start_run("local-lab-v1", ["XSS"])
+        launcher.start_run("local-lab-v1", "local-lab-deployment", ["XSS"])
 
     assert str(error.value) == "Diagnostic run was rejected."
     assert "sensitive" not in str(error.value)
@@ -102,7 +112,7 @@ def test_start_run_rejects_invalid_identifier(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(launcher.subprocess, "Popen", lambda *args, **kwargs: process)
 
     with pytest.raises(launcher.RunLaunchError, match="invalid identifier"):
-        launcher.start_run("local-lab-v1", ["XSS"])
+        launcher.start_run("local-lab-v1", "local-lab-deployment", ["XSS"])
 
     assert process.terminated
 
