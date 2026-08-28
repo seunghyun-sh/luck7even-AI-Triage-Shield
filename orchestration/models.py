@@ -14,6 +14,7 @@ from pydantic import (
     Field,
     StrictBool,
     StrictInt,
+    StrictStr,
     field_validator,
     model_validator,
 )
@@ -104,6 +105,22 @@ class RunRequest(_ContractModel):
 class Progress(_ContractModel):
     completed: StrictInt = Field(ge=0)
     total: StrictInt = Field(ge=0)
+    detail: StrictStr | None = None
+
+    @field_validator("detail")
+    @classmethod
+    def detail_must_be_safe_and_brief(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if not value.strip():
+            raise ValueError("progress.detail must not be blank")
+        if len(value) > 128:
+            raise ValueError("progress.detail must not exceed 128 characters")
+        if any(
+            ord(character) < 32 or 127 <= ord(character) <= 159 for character in value
+        ):
+            raise ValueError("progress.detail must not contain control characters")
+        return value
 
     @model_validator(mode="after")
     def completed_must_not_exceed_known_total(self) -> Progress:
@@ -126,6 +143,7 @@ class RunStatusDocument(_ContractModel):
     requested_vuln_types: list[Literal["XSS", "SQLI"]] = Field(min_length=1)
     status: ExecutionStatus
     stage: ExecutionStage | None
+    failed_stage: ExecutionStage | None = None
     progress: Progress
     started_at: datetime
     updated_at: datetime
@@ -197,6 +215,8 @@ class RunStatusDocument(_ContractModel):
                 raise ValueError(
                     "non-terminal statuses require completed_at to be null"
                 )
+        if self.status is not ExecutionStatus.FAILED and self.failed_stage is not None:
+            raise ValueError("failed_stage is allowed only for FAILED status")
 
         if self.status is ExecutionStatus.QUEUED and self.stage is not None:
             raise ValueError("QUEUED status requires stage to be null")

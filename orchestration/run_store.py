@@ -304,6 +304,7 @@ class RunStore:
                 update={
                     "status": ExecutionStatus.FAILED,
                     "stage": None,
+                    "failed_stage": status.stage,
                     "updated_at": now,
                     "completed_at": now,
                     "processed_result_path": None,

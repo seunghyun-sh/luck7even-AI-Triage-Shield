@@ -27,7 +27,12 @@ from analysis.models import (
     TargetInput,
     TargetManifest,
 )
-from orchestration.models import ExecutionStatus, RunRequest
+from orchestration.models import (
+    ExecutionStage,
+    ExecutionStatus,
+    Progress,
+    RunRequest,
+)
 from orchestration.pipeline import PipelineOrchestrator, TargetValidationError
 from orchestration.run_store import RunAlreadyActiveError, RunStore
 
@@ -133,7 +138,7 @@ def _finding(vuln_type: str, finding_id: str, *, failed: bool = False) -> RawFin
     )
 
 
-def _triage(raw: RawRun) -> ProcessedRun:
+def _triage(raw: RawRun, progress) -> ProcessedRun:
     findings: list[ProcessedFinding] = []
     for raw_finding in raw.findings:
         if raw_finding.scan.status is ScanStatus.FAILED:
@@ -307,6 +312,14 @@ def test_cli_rejects_arbitrary_manifest_path() -> None:
         )
 
 
+@pytest.mark.parametrize("detail", ["", "   ", "line\nbreak", "x" * 129])
+def test_progress_detail_is_optional_safe_and_bounded(detail: str) -> None:
+    with pytest.raises(ValueError):
+        Progress(completed=0, total=1, detail=detail)
+
+    assert Progress.model_validate({"completed": 0, "total": 1}).detail is None
+
+
 def test_run_id_handshake_occurs_only_after_lock_acquisition(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "data")
     active = store.create_run(
@@ -412,6 +425,52 @@ def test_mixed_scan_results_are_partial(tmp_path: Path) -> None:
     assert result.processed_result_path is not None
 
 
+def test_triage_progress_records_detail_heartbeats_and_completion(
+    tmp_path: Path,
+) -> None:
+    store = RunStore(tmp_path / "data")
+    history = []
+
+    def triage(raw: RawRun, progress) -> ProcessedRun:
+        history.append(store.load_status(raw.scan_run_id))
+        progress(0, 193, "AI 후보 계산 중")
+        history.append(store.load_status(raw.scan_run_id))
+        progress(0, 193, "AI 후보 분류 중")
+        history.append(store.load_status(raw.scan_run_id))
+        progress(1, 193, "AI 후보 분류 중")
+        history.append(store.load_status(raw.scan_run_id))
+        progress(193, 193, "AI 후보 분류 완료")
+        history.append(store.load_status(raw.scan_run_id))
+        return _triage(raw, progress)
+
+    result = PipelineOrchestrator(
+        store,
+        xss_scanner=lambda targets, context, progress: [_finding("XSS", "xss-1")],
+        sqli_scanner=lambda targets, context, progress: [],
+        triage=triage,
+        manifest_resolver=_manifest_resolver(_manifest()),
+    ).run("local-lab-v1", DEPLOYMENT_ID, ["XSS"])
+
+    assert result.status is ExecutionStatus.COMPLETED
+    assert [
+        (
+            status.stage,
+            status.progress.completed,
+            status.progress.total,
+            status.progress.detail,
+        )
+        for status in history
+    ] == [
+        (ExecutionStage.AI_TRIAGE, 0, 0, "AI 후보 계산 중"),
+        (ExecutionStage.AI_TRIAGE, 0, 193, "AI 후보 계산 중"),
+        (ExecutionStage.AI_TRIAGE, 0, 193, "AI 후보 분류 중"),
+        (ExecutionStage.AI_TRIAGE, 1, 193, "AI 후보 분류 중"),
+        (ExecutionStage.AI_TRIAGE, 193, 193, "AI 후보 분류 완료"),
+    ]
+    assert history[2].updated_at > history[1].updated_at
+    assert result.progress.detail is None
+
+
 def test_scanner_must_cover_every_requested_target(tmp_path: Path) -> None:
     result = _orchestrator(
         tmp_path,
@@ -422,6 +481,7 @@ def test_scanner_must_cover_every_requested_target(tmp_path: Path) -> None:
     assert result.status is ExecutionStatus.FAILED
     assert result.error is not None
     assert result.error.code == "SCANNER_CONTRACT_FAILED"
+    assert result.failed_stage is ExecutionStage.SCANNING_XSS
     assert result.processed_result_path is None
 
 
@@ -439,7 +499,7 @@ def test_scanner_rejects_finding_for_unknown_target(tmp_path: Path) -> None:
 
 
 def test_all_failed_scans_publish_raw_without_calling_triage(tmp_path: Path) -> None:
-    def no_triage(raw):
+    def no_triage(raw, progress):
         raise AssertionError("Triage must not run when every scan failed")
 
     result = _orchestrator(
@@ -467,8 +527,8 @@ def test_scanner_crash_records_safe_failure_and_releases_lock(tmp_path: Path) ->
 
 
 def test_lineage_mismatch_does_not_publish_processed(tmp_path: Path) -> None:
-    def wrong_lineage(raw: RawRun) -> ProcessedRun:
-        processed = _triage(raw)
+    def wrong_lineage(raw: RawRun, progress) -> ProcessedRun:
+        processed = _triage(raw, progress)
         changed = processed.findings[0].model_copy(update={"case_id": "other-case"})
         return processed.model_copy(update={"findings": [changed]})
 
@@ -546,6 +606,48 @@ def test_invalid_progress_records_failure_and_releases_lock(tmp_path: Path) -> N
     ).run("local-lab-v1", DEPLOYMENT_ID, ["XSS"])
     assert result.status is ExecutionStatus.FAILED
     assert not RunStore(tmp_path / "data").pipeline_lock_active()
+
+
+def test_progress_callback_rejects_inactive_stages_and_decreases(
+    tmp_path: Path,
+) -> None:
+    store = RunStore(tmp_path / "data")
+    run = store.create_run(
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id=DEPLOYMENT_ID,
+            vuln_types=["XSS"],
+        )
+    )
+    orchestrator = _orchestrator(
+        tmp_path,
+        lambda targets, context, progress: [],
+        lambda targets, context, progress: [],
+    )
+    callback = orchestrator._progress_callback(
+        run.scan_run_id, ExecutionStage.SCANNING_XSS
+    )
+
+    with pytest.raises(ValueError, match="outside its active stage"):
+        callback(0, 1)
+
+    validating = run.model_copy(
+        update={
+            "status": ExecutionStatus.RUNNING,
+            "stage": ExecutionStage.VALIDATING_TARGET,
+        }
+    )
+    store.save_status(validating)
+    scanning = validating.model_copy(
+        update={
+            "stage": ExecutionStage.SCANNING_XSS,
+            "progress": Progress(completed=2, total=2),
+        }
+    )
+    store.save_status(scanning)
+
+    with pytest.raises(ValueError, match="moved backwards"):
+        callback(1, 2)
 
 
 def test_component_import_exception_is_normalized_without_details(monkeypatch) -> None:

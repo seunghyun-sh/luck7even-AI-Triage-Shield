@@ -505,6 +505,14 @@ def test_reconcile_orphaned_runs_fails_old_nonterminal_runs_but_not_owner(
             vuln_types=["XSS"],
         )
     )
+    orphan = orphan.model_copy(
+        update={
+            "status": ExecutionStatus.RUNNING,
+            "stage": ExecutionStage.VALIDATING_TARGET,
+            "updated_at": orphan.updated_at + timedelta(microseconds=1),
+        }
+    )
+    store.save_status(orphan)
     owner = store.create_run(
         RunRequest(
             target_set_id="local-lab-v1",
@@ -521,4 +529,5 @@ def test_reconcile_orphaned_runs_fails_old_nonterminal_runs_but_not_owner(
         assert recovered.status is ExecutionStatus.FAILED
         assert recovered.error is not None
         assert recovered.error.code == "ORPHANED_RUN"
+        assert recovered.failed_stage is ExecutionStage.VALIDATING_TARGET
     assert store.load_status(owner.scan_run_id) == owner

@@ -38,7 +38,7 @@ from .models import (
 from .run_store import RunAlreadyActiveError, RunStore
 from .target_registry import TargetRegistryError
 
-ProgressCallback: TypeAlias = Callable[[int, int], None]
+ProgressCallback: TypeAlias = Callable[[int, int, str | None], None]
 AuthProfileResolver: TypeAlias = Callable[[str], Mapping[str, str]]
 ManifestResolver: TypeAlias = Callable[[str], TargetManifest]
 
@@ -57,7 +57,7 @@ class ScanContext:
 Scanner: TypeAlias = Callable[
     [list[TargetCase], ScanContext, ProgressCallback], list[RawFinding]
 ]
-Triage: TypeAlias = Callable[[RawRun], ProcessedRun]
+Triage: TypeAlias = Callable[[RawRun, ProgressCallback], ProcessedRun]
 RunCreatedCallback: TypeAlias = Callable[[str], None]
 
 
@@ -285,10 +285,17 @@ class PipelineOrchestrator:
         status = self._update(
             status,
             stage=ExecutionStage.AI_TRIAGE,
-            progress=Progress(completed=0, total=0),
+            progress=Progress(completed=0, total=0, detail="AI 후보 계산 중"),
         )
         try:
-            processed = ProcessedRun.model_validate(self._triage(raw_run))
+            processed = ProcessedRun.model_validate(
+                self._triage(
+                    raw_run,
+                    self._progress_callback(
+                        status.scan_run_id, ExecutionStage.AI_TRIAGE
+                    ),
+                )
+            )
             self._validate_lineage(raw_run, processed)
         except Exception as error:
             raise _PipelineFailure(
@@ -297,7 +304,7 @@ class PipelineOrchestrator:
         status = self._update(
             status,
             stage=ExecutionStage.PUBLISHING_RESULT,
-            progress=Progress(completed=0, total=0),
+            progress=Progress(completed=0, total=0, detail=None),
         )
         try:
             processed_path = self._store.publish_processed(processed)
@@ -352,16 +359,18 @@ class PipelineOrchestrator:
     def _progress_callback(
         self, scan_run_id: str, stage: ExecutionStage
     ) -> ProgressCallback:
-        def on_progress(completed: int, total: int) -> None:
-            progress = Progress(completed=completed, total=total)
+        def on_progress(completed: int, total: int, detail: str | None = None) -> None:
+            progress = Progress(completed=completed, total=total, detail=detail)
             current = self._store.load_status(scan_run_id)
             if current.stage is not stage:
-                raise ValueError("Scanner reported progress outside its active stage.")
+                raise ValueError(
+                    "Component reported progress outside its active stage."
+                )
             if (
                 progress.completed < current.progress.completed
                 or progress.total < current.progress.total
             ):
-                raise ValueError("Scanner progress moved backwards.")
+                raise ValueError("Component progress moved backwards.")
             self._update(current, progress=progress)
 
         return on_progress
@@ -413,6 +422,9 @@ class PipelineOrchestrator:
             update={
                 "status": terminal,
                 "stage": None,
+                "failed_stage": (
+                    status.stage if terminal is ExecutionStatus.FAILED else None
+                ),
                 "updated_at": now,
                 "completed_at": now,
                 "error": None,
