@@ -17,6 +17,9 @@
     {% if error %}
       <div class="error-box"><strong>Database error</strong><pre>{{ error }}</pre></div>
     {% endif %}
+    {% if filter_message %}
+      <div class="filter-box"><strong>Weak blacklist</strong><p>{{ filter_message }}</p></div>
+    {% endif %}
 
     <div class="result-heading">
       <h2>{% if query %}검색 결과{% else %}전체 콘텐츠{% endif %}</h2>

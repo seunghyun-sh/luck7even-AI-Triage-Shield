@@ -14,7 +14,15 @@
         <a href="{{ url_for('index') }}">홈</a>
         <a href="{{ url_for('catalog') }}">콘텐츠</a>
         <a href="{{ url_for('discover') }}">검색</a>
-        <a class="admin-link" href="{{ url_for('admin_dashboard') }}">운영자</a>
+        {% if session.get('role') == 'admin' %}
+          <a class="admin-link" href="{{ url_for('admin_dashboard') }}">운영자</a>
+        {% endif %}
+        {% if session.get('user_id') %}
+          <a href="{{ url_for('account') }}">{{ session.get('username') }}</a>
+          <a href="{{ url_for('logout') }}">로그아웃</a>
+        {% else %}
+          <a class="admin-link" href="{{ url_for('login') }}">로그인</a>
+        {% endif %}
       </nav>
     </header>
     <main>{% block content %}{% endblock %}</main>

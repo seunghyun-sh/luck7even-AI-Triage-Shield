@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!lab_app_2/.env.aws.example
 
 # Python
 __pycache__/

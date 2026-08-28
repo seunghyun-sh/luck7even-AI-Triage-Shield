@@ -7,7 +7,12 @@ from sqlalchemy import Column, Integer, MetaData, String, Table, Text, create_en
 
 class Database:
     def __init__(self, database_url: str) -> None:
-        self.engine = create_engine(database_url, future=True)
+        self.engine = create_engine(
+            database_url,
+            future=True,
+            pool_pre_ping=True,
+            pool_recycle=280,
+        )
         self.metadata = MetaData()
         self.titles = Table(
             "titles",
@@ -29,13 +34,45 @@ class Database:
             Column("body", Text, nullable=False),
             Column("status", String(30), nullable=False, default="pending"),
         )
+        self.users = Table(
+            "users",
+            self.metadata,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+            Column("username", String(80), nullable=False, unique=True),
+            # INTENTIONALLY WEAK: fake lab passwords only. Never copy this design.
+            Column("password", String(160), nullable=False),
+            Column("role", String(30), nullable=False),
+        )
+        self.subscribers = Table(
+            "subscribers",
+            self.metadata,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+            Column("user_id", Integer, nullable=True),
+            Column("full_name", String(80), nullable=False),
+            Column("email", String(160), nullable=False),
+            Column("plan", String(40), nullable=False),
+            Column("payment_last4", String(4), nullable=False),
+            Column("status", String(30), nullable=False),
+        )
+        self.lab_flags = Table(
+            "lab_flags",
+            self.metadata,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+            Column("flag_name", String(80), nullable=False, unique=True),
+            Column("flag_value", String(200), nullable=False),
+        )
 
     def initialize(self) -> None:
         self.metadata.create_all(self.engine)
         with self.engine.begin() as connection:
-            count = connection.execute(select(self.titles.c.id)).first()
-            if count is None:
+            if connection.execute(select(self.titles.c.id)).first() is None:
                 connection.execute(self.titles.insert(), _SEED_TITLES)
+            if connection.execute(select(self.users.c.id)).first() is None:
+                connection.execute(self.users.insert(), _SEED_USERS)
+            if connection.execute(select(self.subscribers.c.id)).first() is None:
+                connection.execute(self.subscribers.insert(), _SEED_SUBSCRIBERS)
+            if connection.execute(select(self.lab_flags.c.id)).first() is None:
+                connection.execute(self.lab_flags.insert(), _SEED_FLAGS)
 
     def featured_titles(self) -> list[dict]:
         with self.engine.connect() as connection:
@@ -56,6 +93,42 @@ class Database:
                 return [dict(row) for row in rows], None
         except Exception as exc:  # Error disclosure is intentional in this lab.
             return [], str(exc)
+
+    def authenticate_vulnerable(self, username: str, password: str) -> dict | None:
+        # INTENTIONALLY VULNERABLE: raw string interpolation for scanner training.
+        sql = (
+            "SELECT id, username, role FROM users "
+            f"WHERE username = '{username}' AND password = '{password}' LIMIT 1"
+        )
+        try:
+            with self.engine.connect() as connection:
+                row = connection.execute(text(sql)).mappings().first()
+                return dict(row) if row else None
+        except Exception:
+            return None
+
+    def subscriber_for_user(self, user_id: int) -> dict | None:
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                select(self.subscribers).where(self.subscribers.c.user_id == user_id)
+            ).mappings().first()
+            return dict(row) if row else None
+
+    def subscriber_count(self) -> int:
+        with self.engine.connect() as connection:
+            return int(
+                connection.execute(
+                    select(func.count()).select_from(self.subscribers)
+                ).scalar_one()
+            )
+
+    def lab_flag_value(self, flag_name: str) -> str | None:
+        with self.engine.connect() as connection:
+            return connection.execute(
+                select(self.lab_flags.c.flag_value).where(
+                    self.lab_flags.c.flag_name == flag_name
+                )
+            ).scalar_one_or_none()
 
     def get_title(self, title_id: int) -> dict | None:
         with self.engine.connect() as connection:
@@ -162,4 +235,53 @@ _SEED_TITLES = [
         "synopsis": "매일 자정 단 한 번 열리는 문 너머의 세계.",
         "accent": "green",
     },
+]
+
+_SEED_USERS = [
+    {
+        "id": 1,
+        "username": "admin",
+        "password": "admin123",
+        "role": "admin",
+    },
+    {
+        "id": 2,
+        "username": "viewer",
+        "password": "viewer123",
+        "role": "user",
+    },
+]
+
+_SEED_SUBSCRIBERS = [
+    {
+        "user_id": 2,
+        "full_name": "김노바",
+        "email": "nova01@example.test",
+        "plan": "Premium",
+        "payment_last4": "4821",
+        "status": "active",
+    },
+    {
+        "user_id": None,
+        "full_name": "이스트림",
+        "email": "stream02@example.test",
+        "plan": "Basic",
+        "payment_last4": "1937",
+        "status": "active",
+    },
+    {
+        "user_id": None,
+        "full_name": "박시청",
+        "email": "viewer03@example.test",
+        "plan": "Standard",
+        "payment_last4": "7504",
+        "status": "suspended",
+    },
+]
+
+_SEED_FLAGS = [
+    {
+        "flag_name": "sqli_extraction",
+        "flag_value": "FLAG{NOVASTREAM_SQLI_EXTRACTION_SUCCESS}",
+    }
 ]
