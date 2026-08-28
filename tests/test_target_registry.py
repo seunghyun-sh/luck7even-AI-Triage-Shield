@@ -44,6 +44,16 @@ def test_default_registry_resolves_authorized_manifest() -> None:
     for target in targets:
         assert load_registered_target(target.target_set_id) == target.manifest
 
+    by_id = {target.target_set_id: target.manifest for target in targets}
+    lumi_types = {target.vuln_type.value for target in by_id["lumi-market-1"].targets}
+    novastream_types = {
+        target.vuln_type.value for target in by_id["novastream-2"].targets
+    }
+    assert lumi_types == {"XSS", "SQLI"}
+    assert novastream_types == {"XSS", "SQLI"}
+    assert len(by_id["lumi-market-1"].targets) == 5
+    assert len(by_id["novastream-2"].targets) == 4
+
 
 def test_registry_rejects_manifest_outside_config_directory(tmp_path: Path) -> None:
     registry = _write_registry(

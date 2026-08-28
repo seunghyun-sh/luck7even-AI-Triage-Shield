@@ -11,11 +11,11 @@ analysis.models(Contract A/B)와 orchestration.ScanContext를 그대로 따른�
 대상 실습 환경 (모두 Flask, 각자 XSS 취약점이 있는 것으로 확인된 페이지만 다룬다):
 
 - 1번 환경: `lab_app/`(Lumi Market) -- feature/vulnerable-lab 브랜치,
-  docs/vulnerable-lab-1.md. 매니페스트: configs/lumi_market_1_xss_targets.example.json
+  docs/vulnerable-lab-1.md. 매니페스트: configs/lumi_market_1_targets.example.json
   - Reflected: GET /search, query 파라미터 q
   - Stored: POST /reviews(작성) -> GET /reviews(같은 페이지에서 확인), form 파라미터 content
 - 2번 환경: `lab_app_2/`(NovaStream) -- feature/vulnerable-lab-2 브랜치,
-  lab_app_2/README.md. 매니페스트: configs/novastream_2_xss_targets.example.json
+  lab_app_2/README.md. 매니페스트: configs/novastream_2_targets.example.json
   - Reflected: GET /discover, query 파라미터 q
   - Stored: POST /titles/<id>/reviews(작성) -> GET /admin/reviews(다른 페이지에서 확인),
     form 파라미터 body

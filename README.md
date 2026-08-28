@@ -194,8 +194,8 @@ def scan(targets: list[TargetCase], context: ScanContext, on_progress: ProgressC
 
 | 환경 | target_set_id | 매니페스트 | 케이스 |
 | --- | --- | --- | --- |
-| 1번 (Lumi Market) | `lumi-market-1` | `configs/lumi_market_1_xss_targets.example.json` | Reflected: `GET /search` query `q` · Stored: `POST /reviews` form `content` (같은 `/reviews`에서 확인) |
-| 2번 (NovaStream) | `novastream-2` | `configs/novastream_2_xss_targets.example.json` | Reflected: `GET /discover` query `q` · Stored: `POST /titles/1/reviews` form `body` (다른 페이지 `GET /admin/reviews`에서 확인) |
+| 1번 (Lumi Market) | `lumi-market-1` | `configs/lumi_market_1_targets.example.json` | XSS: `GET /search`, `POST /reviews` · SQLi: `POST /account/login`, `GET /products/stock`, `GET /coupon/check` |
+| 2번 (NovaStream) | `novastream-2` | `configs/novastream_2_targets.example.json` | XSS: `GET /discover`, `POST /titles/1/reviews` · SQLi: `GET /catalog`, `POST /login` |
 
 두 매니페스트 모두 `configs/target-registry.json`에 등록되어 있습니다. manifest의
 로컬 주소는 진단 케이스 예시이며, 실제 실행 주소는 검증된 deployment가 덮어씁니다.

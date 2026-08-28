@@ -6,6 +6,7 @@ Use `scanners.sqli.scan` instead.
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from datetime import datetime
@@ -33,10 +34,23 @@ DB_ERROR_KEYWORDS = [
     "warning: mysql",
     "unknown column",
     "sql syntax",
+    "mysqli_sql_exception",
+    "mysql.connector.errors",
+    "pymysql.err",
+    "sqlite3.operationalerror",
+    "sqlite3.programmingerror",
+    "sqlite3.integrityerror",
+    "unrecognized token",
+    "no such table",
+    "no such column",
+    "you can only execute one statement at a time",
+    "sqlalchemy.exc.",
+    "sqlalche.me/e/",
 ]
 
 RESPONSE_DIFF_THRESHOLD = 0.5
 BOOLEAN_DIFF_THRESHOLD = 0.2
+SHORT_JSON_RESPONSE_LIMIT = 4096
 TIME_DELAY_MARGIN_MS = 3000
 
 
@@ -49,6 +63,19 @@ def _response_diff_ratio(text_a: str, text_b: str) -> float:
     len_a, len_b = len(text_a), len(text_b)
     longer = max(len_a, len_b, 1)
     return abs(len_a - len_b) / longer
+
+
+def _short_json_content_differs(text_a: str, text_b: str) -> bool:
+    """Detect semantic differences in small JSON responses without flagging HTML noise."""
+
+    if max(len(text_a.encode("utf-8")), len(text_b.encode("utf-8"))) > (
+        SHORT_JSON_RESPONSE_LIMIT
+    ):
+        return False
+    try:
+        return json.loads(text_a) != json.loads(text_b)
+    except (json.JSONDecodeError, TypeError):
+        return False
 
 
 def _now() -> datetime:
@@ -118,8 +145,6 @@ def load_payload_profile(profile_id: str, payloads_dir: Path) -> list[dict]:
     path = (payloads_dir / f"{profile_id}.json").resolve()
     if payloads_dir.resolve() not in path.parents:
         raise ValueError("payload profile id resolved outside the payloads directory")
-    import json
-
     data = json.loads(path.read_text(encoding="utf-8"))
     return data["payloads"]
 
@@ -310,9 +335,15 @@ def evaluate_boolean_pair_payload(
         )
 
     diff_ratio = _response_diff_ratio(true_resp.text, false_resp.text)
-    if diff_ratio > BOOLEAN_DIFF_THRESHOLD:
+    json_content_differs = _short_json_content_differs(true_resp.text, false_resp.text)
+    if diff_ratio > BOOLEAN_DIFF_THRESHOLD or json_content_differs:
         label = RuleLabel.SUSPECTED
-        reason = f"참/거짓 페이로드 응답이 {diff_ratio:.0%} 다름(Boolean-based 의심)"
+        signal = (
+            "JSON 내용이 다름"
+            if json_content_differs
+            else f"길이가 {diff_ratio:.0%} 다름"
+        )
+        reason = f"참/거짓 페이로드 응답의 {signal}(Boolean-based 의심)"
     else:
         label = RuleLabel.SAFE
         reason = f"참/거짓 페이로드 응답이 비슷함(Boolean-based 신호 없음, 차이 {diff_ratio:.1%})"
