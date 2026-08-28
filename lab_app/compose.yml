@@ -1,0 +1,73 @@
+services:
+  mysql-1:
+    image: mysql:8.0
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    env_file:
+      - .env
+    volumes:
+      - lab_1_mysql_data:/var/lib/mysql
+      - ./schema_mysql.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./seed_mysql.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER --password=$$MYSQL_PASSWORD --silent
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  web-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      LAB_1_HOST: 0.0.0.0
+      LAB_1_PORT: 5001
+      LAB_1_SECURITY_MODE: vulnerable
+      LAB_1_DB_ENGINE: mysql
+      LAB_1_DB_HOST: mysql-1
+      LAB_1_DB_PORT: 3306
+    depends_on:
+      mysql-1:
+        condition: service_healthy
+    ports:
+      - "5001:5001"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:5001/health', timeout=2)
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  web-1-safe:
+    profiles:
+      - safe
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      LAB_1_HOST: 0.0.0.0
+      LAB_1_PORT: 5001
+      LAB_1_SECURITY_MODE: secure
+      LAB_1_DB_ENGINE: mysql
+      LAB_1_DB_HOST: mysql-1
+      LAB_1_DB_PORT: 3306
+    depends_on:
+      mysql-1:
+        condition: service_healthy
+    ports:
+      - "5101:5001"
+
+volumes:
+  lab_1_mysql_data:

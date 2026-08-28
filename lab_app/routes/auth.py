@@ -1,10 +1,16 @@
 """Account pages, including the intentional SQL injection target."""
 
-import sqlite3
+from flask import (
+    Blueprint,
+    current_app,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 
-from flask import Blueprint, redirect, render_template, request, session, url_for
-
-from lab_app.db import get_db
+from lab_app.db import DATABASE_ERRORS, INTEGRITY_ERRORS, get_db
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/account")
 
@@ -16,16 +22,24 @@ def login():
     if request.method == "POST":
         username = request.form.get("username", "")
         password = request.form.get("password", "")
-        # Intentionally vulnerable: raw form input is concatenated into SQL.
-        query = (
-            "SELECT id, username, display_name, email, role FROM users "
-            f"WHERE username = '{username}' AND password = '{password}'"
-        )
         try:
-            user = get_db().execute(query).fetchone()
-        except sqlite3.Error as exc:
+            if current_app.config["LAB_1_SECURITY_MODE"] == "vulnerable":
+                # Intentionally vulnerable in the isolated training mode.
+                query = (
+                    "SELECT id, username, display_name, email, role FROM users "
+                    f"WHERE username = '{username}' AND password = '{password}'"
+                )
+                user = get_db().execute(query).fetchone()
+            else:
+                user = get_db().execute(
+                    "SELECT id, username, display_name, email, role FROM users "
+                    "WHERE username = ? AND password = ?",
+                    (username, password),
+                ).fetchone()
+        except DATABASE_ERRORS as exc:
             user = None
-            sql_error = str(exc)
+            if current_app.config["LAB_1_SECURITY_MODE"] == "vulnerable":
+                sql_error = str(exc)
         if user:
             session.clear()
             session["user"] = dict(user)
@@ -54,7 +68,7 @@ def register():
                 )
                 db.commit()
                 return redirect(url_for("auth.login"))
-            except sqlite3.IntegrityError:
+            except INTEGRITY_ERRORS:
                 error = "이미 사용 중인 아이디입니다."
     return render_template("register.html", error=error)
 
@@ -71,4 +85,3 @@ def profile():
 def logout():
     session.clear()
     return redirect(url_for("storefront.home"))
-

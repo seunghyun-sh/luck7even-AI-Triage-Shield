@@ -4,13 +4,17 @@ import secrets
 
 from flask import Blueprint, abort, current_app, request
 
-from lab_app.db import init_db
+from lab_app.db import DATABASE_ERRORS, get_db, reset_db
 
 lab_bp = Blueprint("lab", __name__)
 
 
 @lab_bp.get("/health")
 def health():
+    try:
+        get_db().execute("SELECT 1").fetchone()
+    except DATABASE_ERRORS:
+        return {"status": "error"}, 503
     return {"status": "ok"}, 200
 
 
@@ -20,5 +24,5 @@ def reset():
     supplied = request.headers.get("X-Lab-1-Reset-Token", "")
     if not expected or not secrets.compare_digest(expected, supplied):
         abort(404)
-    init_db()
+    reset_db()
     return {"status": "reset"}, 200
