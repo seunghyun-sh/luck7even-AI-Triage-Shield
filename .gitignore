@@ -2,6 +2,14 @@
 .env
 .env.*
 !.env.example
+.envrc
+.streamlit/secrets.toml
+configs/deployments.local.json
+configs/knowledge-base.local.json
+*.pem
+*.key
+*.p12
+*.pfx
 
 # Python
 __pycache__/
@@ -17,12 +25,15 @@ venv/
 data/raw/*
 data/processed/*
 data/exports/*
+data/runs/
+data/cache/
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/exports/.gitkeep
 *.db
 *.sqlite
 *.sqlite3
+*.log
 
 # Editors and operating systems
 .DS_Store

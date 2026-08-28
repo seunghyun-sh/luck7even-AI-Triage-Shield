@@ -1,0 +1,32 @@
+{
+  "profile": "xss-v1",
+  "version": "1.0",
+  "source": "reviewed-static",
+  "model": null,
+  "items": [
+    {
+      "payload_case_id": "script-alert-basic",
+      "payload": "<script>alert(1)</script>"
+    },
+    {
+      "payload_case_id": "img-onerror-basic",
+      "payload": "<img src=x onerror=alert(1)>"
+    },
+    {
+      "payload_case_id": "svg-onload-basic",
+      "payload": "<svg onload=alert(1)>"
+    },
+    {
+      "payload_case_id": "quote-breakout-img-onerror",
+      "payload": "\"><img src=x onerror=alert(1)>"
+    },
+    {
+      "payload_case_id": "control-plain-search-text",
+      "payload": "normal-search-text"
+    },
+    {
+      "payload_case_id": "control-html-escaped-text",
+      "payload": "safe &amp; harmless"
+    }
+  ]
+}

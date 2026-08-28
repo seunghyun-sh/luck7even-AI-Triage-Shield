@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.0",
+  "target_set_id": "novastream-2",
+  "base_url": "http://127.0.0.1:5000",
+  "request_policy": {
+    "timeout_seconds": 10,
+    "follow_redirects": false
+  },
+  "targets": [
+    {
+      "case_id": "nova-discover-reflected",
+      "vuln_type": "XSS",
+      "path": "/discover",
+      "method": "GET",
+      "input": {
+        "location": "query",
+        "parameters": {"q": "baseline"},
+        "attack_parameter": "q"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "xss-v1",
+      "manual_verification_profile": "xss-reflection"
+    },
+    {
+      "case_id": "nova-reviews-stored",
+      "vuln_type": "XSS",
+      "path": "/titles/1/reviews",
+      "method": "POST",
+      "input": {
+        "location": "form",
+        "parameters": {"nickname": "tester", "body": "baseline review"},
+        "attack_parameter": "body"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "xss-v1",
+      "manual_verification_profile": "xss-stored"
+    },
+    {
+      "case_id": "novastream-catalog-sqli",
+      "vuln_type": "SQLI",
+      "path": "/catalog",
+      "method": "GET",
+      "input": {
+        "location": "query",
+        "parameters": {"q": "Nova"},
+        "attack_parameter": "q"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "sqli-waf-bypass",
+      "manual_verification_profile": "sqli-response-difference"
+    },
+    {
+      "case_id": "novastream-login-sqli",
+      "vuln_type": "SQLI",
+      "path": "/login",
+      "method": "POST",
+      "input": {
+        "location": "form",
+        "parameters": {"username": "not_a_user", "password": "wrong"},
+        "attack_parameter": "username"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "sqli-waf-bypass",
+      "manual_verification_profile": "sqli-auth-bypass"
+    }
+  ]
+}

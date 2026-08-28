@@ -1,0 +1,101 @@
+{
+  "schema_version": "1.0",
+  "scan_run_id": "run-20260827-01",
+  "target_set_id": "local-lab-v1",
+  "started_at": "2026-08-27T09:30:00+09:00",
+  "completed_at": "2026-08-27T09:31:00+09:00",
+  "status": "PARTIAL",
+  "findings": [
+    {
+      "case_id": "xss-reflected-a",
+      "finding_id": "XSS-001",
+      "scanned_at": "2026-08-27T09:30:10+09:00",
+      "vuln_type": "XSS",
+      "scan": {
+        "status": "COMPLETED",
+        "request": {"url": "http://127.0.0.1:5000/case/xss-a", "method": "GET", "input_location": "query", "parameter": "name", "payload": "<script>alert(1)</script>"},
+        "response": {"http_status": 200, "elapsed_ms": 182, "baseline_elapsed_ms": null, "evidence_summary": "입력값이 인코딩 없이 응답에 반사되었습니다.", "html_path": "responses/XSS-001.html"},
+        "rule": {"label": "SUSPECTED", "reason": "페이로드가 실행 가능한 HTML 영역에 반사되었습니다."},
+        "error": null
+      }
+    },
+    {
+      "case_id": "xss-reflected-b",
+      "finding_id": "XSS-002",
+      "scanned_at": "2026-08-27T09:30:15+09:00",
+      "vuln_type": "XSS",
+      "scan": {
+        "status": "COMPLETED",
+        "request": {"url": "http://127.0.0.1:5000/case/xss-b", "method": "GET", "input_location": "query", "parameter": "name", "payload": "<script>alert(1)</script>"},
+        "response": {"http_status": 200, "elapsed_ms": 170, "baseline_elapsed_ms": null, "evidence_summary": "입력값의 꺾쇠 문자가 HTML entity로 변환되었습니다.", "html_path": "responses/XSS-002.html"},
+        "rule": {"label": "SUSPECTED", "reason": "페이로드 문자열이 응답에 존재하여 후보로 수집했습니다."},
+        "error": null
+      }
+    },
+    {
+      "case_id": "xss-reflected-c",
+      "finding_id": "XSS-003",
+      "scanned_at": "2026-08-27T09:30:20+09:00",
+      "vuln_type": "XSS",
+      "scan": {
+        "status": "COMPLETED",
+        "request": {"url": "http://127.0.0.1:5000/case/xss-c", "method": "GET", "input_location": "query", "parameter": "name", "payload": "<img src=x onerror=alert(1)>"},
+        "response": {"http_status": 200, "elapsed_ms": 176, "baseline_elapsed_ms": null, "evidence_summary": "페이로드 일부가 응답에 반사되었으나 실행 위치가 불명확합니다.", "html_path": "responses/XSS-003.html"},
+        "rule": {"label": "SUSPECTED", "reason": "실행 가능성을 배제할 수 없어 후보로 수집했습니다."},
+        "error": null
+      }
+    },
+    {
+      "case_id": "sqli-search-a",
+      "finding_id": "SQLI-001",
+      "scanned_at": "2026-08-27T09:30:30+09:00",
+      "vuln_type": "SQLI",
+      "scan": {
+        "status": "COMPLETED",
+        "request": {"url": "http://127.0.0.1:5000/case/sqli-a", "method": "GET", "input_location": "query", "parameter": "id", "payload": "' OR 1=1 --"},
+        "response": {"http_status": 200, "elapsed_ms": 205, "baseline_elapsed_ms": 180, "evidence_summary": "참 조건에서 정상 요청보다 많은 결과가 반환되었습니다.", "html_path": "responses/SQLI-001.html"},
+        "rule": {"label": "SUSPECTED", "reason": "참·거짓 조건에 따라 응답 건수가 달라졌습니다."},
+        "error": null
+      }
+    },
+    {
+      "case_id": "sqli-search-b",
+      "finding_id": "SQLI-002",
+      "scanned_at": "2026-08-27T09:30:40+09:00",
+      "vuln_type": "SQLI",
+      "scan": {
+        "status": "COMPLETED",
+        "request": {"url": "http://127.0.0.1:5000/case/sqli-b", "method": "GET", "input_location": "query", "parameter": "id", "payload": "' OR 1=1 --"},
+        "response": {"http_status": 200, "elapsed_ms": 184, "baseline_elapsed_ms": 181, "evidence_summary": "공격값과 정상값의 응답 차이가 발견되지 않았습니다.", "html_path": "responses/SQLI-002.html"},
+        "rule": {"label": "SAFE", "reason": "DB 오류, 응답 차이와 시간 지연 신호가 없습니다."},
+        "error": null
+      }
+    },
+    {
+      "case_id": "sqli-search-c",
+      "finding_id": "SQLI-003",
+      "scanned_at": "2026-08-27T09:30:50+09:00",
+      "vuln_type": "SQLI",
+      "scan": {
+        "status": "FAILED",
+        "request": {"url": "http://127.0.0.1:5000/case/sqli-c", "method": "GET", "input_location": "query", "parameter": "id", "payload": "' AND SLEEP(5) --"},
+        "response": {"http_status": null, "elapsed_ms": null, "baseline_elapsed_ms": null, "evidence_summary": null, "html_path": null},
+        "rule": {"label": null, "reason": null},
+        "error": {"code": "SCAN_TIMEOUT", "message": "대상 요청 시간이 초과되었습니다.", "retryable": true}
+      }
+    },
+    {
+      "case_id": "sqli-search-d",
+      "finding_id": "SQLI-004",
+      "scanned_at": "2026-08-27T09:31:00+09:00",
+      "vuln_type": "SQLI",
+      "scan": {
+        "status": "COMPLETED",
+        "request": {"url": "http://127.0.0.1:5000/case/sqli-d", "method": "GET", "input_location": "query", "parameter": "id", "payload": "' UNION SELECT NULL --"},
+        "response": {"http_status": 500, "elapsed_ms": 220, "baseline_elapsed_ms": 178, "evidence_summary": "MySQL 구문 오류가 응답에 노출되었습니다.", "html_path": "responses/SQLI-004.html"},
+        "rule": {"label": "SUSPECTED", "reason": "DB 오류 메시지가 노출되었습니다."},
+        "error": null
+      }
+    }
+  ]
+}

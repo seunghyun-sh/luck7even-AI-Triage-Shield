@@ -1,0 +1,91 @@
+{
+  "schema_version": "1.0",
+  "target_set_id": "lumi-market-1",
+  "base_url": "http://127.0.0.1:5001",
+  "request_policy": {
+    "timeout_seconds": 10,
+    "follow_redirects": false
+  },
+  "targets": [
+    {
+      "case_id": "lumi-search-reflected",
+      "vuln_type": "XSS",
+      "path": "/search",
+      "method": "GET",
+      "input": {
+        "location": "query",
+        "parameters": {"q": "baseline"},
+        "attack_parameter": "q"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "xss-v1",
+      "manual_verification_profile": "xss-reflection"
+    },
+    {
+      "case_id": "lumi-reviews-stored",
+      "vuln_type": "XSS",
+      "path": "/reviews",
+      "method": "POST",
+      "input": {
+        "location": "form",
+        "parameters": {
+          "author": "tester",
+          "title": "review title",
+          "content": "baseline content",
+          "rating": "5"
+        },
+        "attack_parameter": "content"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "xss-v1",
+      "manual_verification_profile": "xss-stored"
+    },
+    {
+      "case_id": "lumi-login-sqli",
+      "vuln_type": "SQLI",
+      "path": "/account/login",
+      "method": "POST",
+      "input": {
+        "location": "form",
+        "parameters": {"username": "not_a_user", "password": "wrong"},
+        "attack_parameter": "username"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "sqli-default",
+      "manual_verification_profile": "sqli-auth-bypass"
+    },
+    {
+      "case_id": "lumi-stock-sqli",
+      "vuln_type": "SQLI",
+      "path": "/products/stock",
+      "method": "GET",
+      "input": {
+        "location": "query",
+        "parameters": {"product_id": "1"},
+        "attack_parameter": "product_id"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "sqli-default",
+      "manual_verification_profile": "sqli-response-difference"
+    },
+    {
+      "case_id": "lumi-coupon-sqli",
+      "vuln_type": "SQLI",
+      "path": "/coupon/check",
+      "method": "GET",
+      "input": {
+        "location": "query",
+        "parameters": {"code": "NOPE123"},
+        "attack_parameter": "code"
+      },
+      "requires_pre_auth": false,
+      "auth_profile": null,
+      "payload_profile": "sqli-default",
+      "manual_verification_profile": "sqli-response-time"
+    }
+  ]
+}

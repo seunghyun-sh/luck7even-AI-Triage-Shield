@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "payload_profile_id": "sqli-default",
+  "payloads": [
+    {"payload_case_id": "normal-laptop", "type": "single", "value": "laptop"},
+    {"payload_case_id": "normal-phone", "type": "single", "value": "phone"},
+    {"payload_case_id": "normal-keyboard", "type": "single", "value": "keyboard"},
+    {"payload_case_id": "fp-obrien", "type": "single", "value": "O'Brien"},
+    {"payload_case_id": "fp-discount", "type": "single", "value": "50% off--discount"},
+    {"payload_case_id": "attack-or-1eq1", "type": "single", "value": "' OR '1'='1"},
+    {"payload_case_id": "attack-convert", "type": "single", "value": "' AND 1=CONVERT(int,(SELECT @@version))--"},
+    {"payload_case_id": "attack-sleep-5", "type": "single", "value": "' OR SLEEP(5)--"},
+    {"payload_case_id": "attack-union-2col", "type": "single", "value": "' UNION SELECT NULL,NULL--"},
+    {"payload_case_id": "attack-union-3col", "type": "single", "value": "' UNION SELECT NULL,NULL,NULL--"},
+    {"payload_case_id": "attack-union-4col", "type": "single", "value": "' UNION SELECT NULL,NULL,NULL,NULL--"},
+    {"payload_case_id": "boolean-pair-1", "type": "boolean_pair", "true_value": "1 AND 1=1", "false_value": "1 AND 1=2"},
+    {"payload_case_id": "boolean-pair-quoted", "type": "boolean_pair", "true_value": "x' OR '1'='1' --", "false_value": "x' OR '1'='2' --"}
+  ]
+}
