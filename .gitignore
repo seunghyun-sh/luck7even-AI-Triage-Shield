@@ -6,6 +6,7 @@
 .streamlit/secrets.toml
 configs/deployments.local.json
 configs/knowledge-base.local.json
+configs/.deployments.lock
 *.pem
 *.key
 *.p12
