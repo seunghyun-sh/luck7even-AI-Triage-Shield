@@ -328,6 +328,16 @@ def build_excel_report(
     summary.title = "진단요약"
 
     dashboard_summary = build_summary(frame)
+    official_reference_rows = _official_reference_rows(rows)
+    grounded_finding_ids = {
+        row.get("finding_id")
+        for row in rows
+        if row.get("grounding_status") == "GROUNDED"
+    }
+    verified_reference_finding_ids = {
+        row.get("finding_id") for row in official_reference_rows
+    }
+    invalid_grounded_count = len(grounded_finding_ids - verified_reference_finding_ids)
     summary_rows = [
         ("scan_run_id", _metadata_value(run_metadata, "scan_run_id")),
         ("target_set_id", _metadata_value(run_metadata, "target_set_id")),
@@ -340,35 +350,15 @@ def build_excel_report(
         ("스캔 실패", dashboard_summary["scan_failed"]),
         ("AI 완료", dashboard_summary["ai_completed"]),
         ("AI 미요청", dashboard_summary["ai_not_requested"]),
-        ("AI 보조 취약 판정", dashboard_summary["ai_vulnerable"]),
-        ("AI 보조 판정 불가", dashboard_summary["ai_inconclusive"]),
+        ("AI 보조 취약", dashboard_summary["ai_vulnerable"]),
+        ("AI 보조 안전", dashboard_summary["ai_safe"]),
+        ("AI 판정 불가", dashboard_summary["ai_inconclusive"]),
+        ("공식근거 확보", len(verified_reference_finding_ids)),
+        ("공식근거 부족", dashboard_summary["ai_insufficient"]),
+        ("공식근거 검증 실패", invalid_grounded_count),
         ("AI 처리 실패", dashboard_summary["ai_failed"]),
         ("수동 검토 필요", dashboard_summary["needs_human_review"]),
         ("규칙 취약 의심", dashboard_summary["rule_suspected"]),
-        (
-            "GROUNDED",
-            int(
-                frame.get("grounding_status", pd.Series(dtype=object))
-                .eq("GROUNDED")
-                .sum()
-            ),
-        ),
-        (
-            "INSUFFICIENT",
-            int(
-                frame.get("grounding_status", pd.Series(dtype=object))
-                .eq("INSUFFICIENT")
-                .sum()
-            ),
-        ),
-        (
-            "NOT_APPLICABLE",
-            int(
-                frame.get("grounding_status", pd.Series(dtype=object))
-                .eq("NOT_APPLICABLE")
-                .sum()
-            ),
-        ),
     ]
     if evaluation:
         summary_rows.extend(_flatten_evaluation(evaluation, "evaluation."))
@@ -415,7 +405,7 @@ def build_excel_report(
     _write_table(
         official_references,
         _OFFICIAL_REFERENCE_COLUMNS,
-        _official_reference_rows(rows),
+        official_reference_rows,
         "공식 근거",
     )
 

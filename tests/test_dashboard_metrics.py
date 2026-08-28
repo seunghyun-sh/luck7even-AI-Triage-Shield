@@ -24,6 +24,7 @@ def _findings() -> pd.DataFrame:
                 "rule_label": "SUSPECTED",
                 "ai_status": "COMPLETED",
                 "ai_label": "VULNERABLE",
+                "grounding_status": "GROUNDED",
                 "needs_human_review": False,
             },
             {
@@ -34,6 +35,7 @@ def _findings() -> pd.DataFrame:
                 "rule_label": "SUSPECTED",
                 "ai_status": "COMPLETED",
                 "ai_label": "VULNERABLE",
+                "grounding_status": "GROUNDED",
                 "needs_human_review": True,
             },
             {
@@ -44,6 +46,7 @@ def _findings() -> pd.DataFrame:
                 "rule_label": "SAFE",
                 "ai_status": "COMPLETED",
                 "ai_label": "SAFE",
+                "grounding_status": "GROUNDED",
                 "needs_human_review": False,
             },
             {
@@ -54,6 +57,7 @@ def _findings() -> pd.DataFrame:
                 "rule_label": "SAFE",
                 "ai_status": "COMPLETED",
                 "ai_label": "SAFE",
+                "grounding_status": "GROUNDED",
                 "needs_human_review": False,
             },
             {
@@ -64,6 +68,7 @@ def _findings() -> pd.DataFrame:
                 "rule_label": "SUSPECTED",
                 "ai_status": "COMPLETED",
                 "ai_label": "INCONCLUSIVE",
+                "grounding_status": "INSUFFICIENT",
                 "needs_human_review": True,
             },
             {
@@ -74,6 +79,7 @@ def _findings() -> pd.DataFrame:
                 "rule_label": None,
                 "ai_status": "FAILED",
                 "ai_label": None,
+                "grounding_status": "NOT_APPLICABLE",
                 "needs_human_review": True,
             },
         ]
@@ -115,7 +121,10 @@ def test_aggregations_follow_dashboard_rules() -> None:
     assert build_summary(findings) == {
         "total_findings": 6,
         "ai_vulnerable": 2,
+        "ai_safe": 2,
         "ai_inconclusive": 1,
+        "ai_grounded": 4,
+        "ai_insufficient": 1,
         "scan_completed": 5,
         "scan_failed": 1,
         "ai_completed": 5,
@@ -148,7 +157,10 @@ def test_empty_findings_are_safe() -> None:
     assert build_summary(empty) == {
         "total_findings": 0,
         "ai_vulnerable": 0,
+        "ai_safe": 0,
         "ai_inconclusive": 0,
+        "ai_grounded": 0,
+        "ai_insufficient": 0,
         "scan_completed": 0,
         "scan_failed": 0,
         "ai_completed": 0,

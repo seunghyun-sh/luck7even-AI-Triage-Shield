@@ -25,6 +25,7 @@ def test_excel_report_has_safe_review_sheets_and_round_trips() -> None:
                 "ai_status_reason": "SCAN_FAILED",
                 "ai_label": None,
                 "needs_human_review": True,
+                "grounding_status": "NOT_APPLICABLE",
                 "ai_error": "=AI unavailable",
                 "recommendation": "=review manually",
                 "assessment_summary": "bad\x00value",
@@ -95,6 +96,7 @@ def test_excel_comparison_uses_semantic_rule_ai_matches() -> None:
                 "ai_status": "COMPLETED",
                 "ai_label": "VULNERABLE",
                 "needs_human_review": False,
+                "grounding_status": "GROUNDED",
             },
             {
                 "case_id": "safe",
@@ -105,6 +107,7 @@ def test_excel_comparison_uses_semantic_rule_ai_matches() -> None:
                 "ai_status": "COMPLETED",
                 "ai_label": "SAFE",
                 "needs_human_review": False,
+                "grounding_status": "GROUNDED",
             },
             {
                 "case_id": "unscored",
@@ -115,6 +118,7 @@ def test_excel_comparison_uses_semantic_rule_ai_matches() -> None:
                 "ai_status": "NOT_REQUESTED",
                 "ai_label": None,
                 "needs_human_review": True,
+                "grounding_status": "NOT_APPLICABLE",
             },
         ]
     )
@@ -205,9 +209,9 @@ def test_excel_exports_official_references_and_grounding_counts() -> None:
         "source-1",
         "file-1",
     ]
-    assert summary_rows["GROUNDED"] == 1
-    assert summary_rows["INSUFFICIENT"] == 1
-    assert summary_rows["NOT_APPLICABLE"] == 0
+    assert summary_rows["공식근거 확보"] == 1
+    assert summary_rows["공식근거 부족"] == 1
+    assert summary_rows["공식근거 검증 실패"] == 0
 
 
 def test_excel_rejects_forged_or_unbound_official_references() -> None:
@@ -251,6 +255,141 @@ def test_excel_rejects_forged_or_unbound_official_references() -> None:
     )
 
     assert workbook["공식근거"].max_row == 4
+    summary_rows = {
+        row[0]: row[1]
+        for row in workbook["진단요약"].iter_rows(min_row=5, values_only=True)
+        if row[0] is not None
+    }
+    assert summary_rows["공식근거 확보"] == 0
+    assert summary_rows["공식근거 검증 실패"] == 1
+
+
+def test_excel_summary_counts_grounded_ai_safe_and_vulnerable_findings() -> None:
+    findings = pd.DataFrame(
+        [
+            {
+                "case_id": "xss-vulnerable",
+                "finding_id": "finding-xss-vulnerable",
+                "vuln_type": "XSS",
+                "scan_status": "COMPLETED",
+                "rule_label": "SUSPECTED",
+                "ai_status": "COMPLETED",
+                "ai_label": "VULNERABLE",
+                "needs_human_review": True,
+                "grounding_status": "GROUNDED",
+                "source_evidence": "R1",
+                "provenance_model": "review-model",
+            },
+            {
+                "case_id": "xss-safe",
+                "finding_id": "finding-xss-safe",
+                "vuln_type": "XSS",
+                "scan_status": "COMPLETED",
+                "rule_label": "SAFE",
+                "ai_status": "COMPLETED",
+                "ai_label": "SAFE",
+                "needs_human_review": True,
+                "grounding_status": "GROUNDED",
+                "source_evidence": "R2",
+                "provenance_model": "review-model",
+            },
+            {
+                "case_id": "sqli-vulnerable",
+                "finding_id": "finding-sqli-vulnerable",
+                "vuln_type": "SQLI",
+                "scan_status": "COMPLETED",
+                "rule_label": "SUSPECTED",
+                "ai_status": "COMPLETED",
+                "ai_label": "VULNERABLE",
+                "needs_human_review": True,
+                "grounding_status": "GROUNDED",
+                "source_evidence": "R3",
+                "provenance_model": "review-model",
+            },
+            {
+                "case_id": "sqli-inconclusive",
+                "finding_id": "finding-sqli-inconclusive",
+                "vuln_type": "SQLI",
+                "scan_status": "COMPLETED",
+                "rule_label": "SUSPECTED",
+                "ai_status": "COMPLETED",
+                "ai_label": "INCONCLUSIVE",
+                "needs_human_review": True,
+                "grounding_status": "INSUFFICIENT",
+                "source_evidence": "R4",
+                "provenance_model": "review-model",
+            },
+        ]
+    )
+
+    workbook = load_workbook(
+        BytesIO(build_excel_report(findings, {"scan_run_id": "run-1"}))
+    )
+    summary_rows = {
+        row[0]: row[1]
+        for row in workbook["진단요약"].iter_rows(min_row=5, values_only=True)
+        if row[0] is not None
+    }
+    detail = workbook["상세결과"]
+    headers = {
+        cell.value: column
+        for column, cell in enumerate(detail[4], start=1)
+        if cell.value is not None
+    }
+
+    assert workbook.sheetnames == [
+        "진단요약",
+        "상세결과",
+        "조치권고",
+        "판정비교",
+        "공식근거",
+    ]
+    assert {
+        key: summary_rows[key]
+        for key in (
+            "AI 보조 취약",
+            "AI 보조 안전",
+            "AI 판정 불가",
+            "공식근거 확보",
+            "공식근거 부족",
+            "공식근거 검증 실패",
+            "AI 처리 실패",
+            "수동 검토 필요",
+        )
+    } == {
+        "AI 보조 취약": 2,
+        "AI 보조 안전": 1,
+        "AI 판정 불가": 1,
+        "공식근거 확보": 0,
+        "공식근거 부족": 1,
+        "공식근거 검증 실패": 3,
+        "AI 처리 실패": 0,
+        "수동 검토 필요": 4,
+    }
+    assert [detail.cell(row, headers["AI 보조 판정"]).value for row in range(5, 9)] == [
+        "VULNERABLE",
+        "SAFE",
+        "VULNERABLE",
+        "INCONCLUSIVE",
+    ]
+    assert [detail.cell(row, headers["근거 상태"]).value for row in range(5, 9)] == [
+        "GROUNDED",
+        "GROUNDED",
+        "GROUNDED",
+        "INSUFFICIENT",
+    ]
+    assert [detail.cell(row, headers["생성 모델"]).value for row in range(5, 9)] == [
+        "review-model",
+        "review-model",
+        "review-model",
+        "review-model",
+    ]
+    assert [detail.cell(row, headers["AI 소스 증거"]).value for row in range(5, 9)] == [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+    ]
 
 
 def test_partial_report_summary_matches_dashboard_status_counts_and_evaluation() -> (
@@ -267,6 +406,7 @@ def test_partial_report_summary_matches_dashboard_status_counts_and_evaluation()
                 "ai_status": "COMPLETED",
                 "ai_label": "VULNERABLE",
                 "needs_human_review": False,
+                "grounding_status": "GROUNDED",
             },
             {
                 "case_id": "not-requested",
@@ -277,6 +417,7 @@ def test_partial_report_summary_matches_dashboard_status_counts_and_evaluation()
                 "ai_status": "NOT_REQUESTED",
                 "ai_label": None,
                 "needs_human_review": True,
+                "grounding_status": "NOT_APPLICABLE",
             },
             {
                 "case_id": "ai-failed",
@@ -287,6 +428,7 @@ def test_partial_report_summary_matches_dashboard_status_counts_and_evaluation()
                 "ai_status": "FAILED",
                 "ai_label": None,
                 "needs_human_review": True,
+                "grounding_status": "NOT_APPLICABLE",
             },
             {
                 "case_id": "scan-failed",
@@ -297,6 +439,7 @@ def test_partial_report_summary_matches_dashboard_status_counts_and_evaluation()
                 "ai_status": "NOT_REQUESTED",
                 "ai_label": None,
                 "needs_human_review": True,
+                "grounding_status": "NOT_APPLICABLE",
             },
         ]
     )
@@ -335,8 +478,12 @@ def test_partial_report_summary_matches_dashboard_status_counts_and_evaluation()
         "스캔 실패": summary_rows["스캔 실패"],
         "AI 완료": summary_rows["AI 완료"],
         "AI 미요청": summary_rows["AI 미요청"],
-        "AI 보조 취약 판정": summary_rows["AI 보조 취약 판정"],
-        "AI 보조 판정 불가": summary_rows["AI 보조 판정 불가"],
+        "AI 보조 취약": summary_rows["AI 보조 취약"],
+        "AI 보조 안전": summary_rows["AI 보조 안전"],
+        "AI 판정 불가": summary_rows["AI 판정 불가"],
+        "공식근거 확보": summary_rows["공식근거 확보"],
+        "공식근거 부족": summary_rows["공식근거 부족"],
+        "공식근거 검증 실패": summary_rows["공식근거 검증 실패"],
         "AI 처리 실패": summary_rows["AI 처리 실패"],
         "수동 검토 필요": summary_rows["수동 검토 필요"],
         "규칙 취약 의심": summary_rows["규칙 취약 의심"],
@@ -346,8 +493,12 @@ def test_partial_report_summary_matches_dashboard_status_counts_and_evaluation()
         "스캔 실패": dashboard_summary["scan_failed"],
         "AI 완료": dashboard_summary["ai_completed"],
         "AI 미요청": dashboard_summary["ai_not_requested"],
-        "AI 보조 취약 판정": dashboard_summary["ai_vulnerable"],
-        "AI 보조 판정 불가": dashboard_summary["ai_inconclusive"],
+        "AI 보조 취약": dashboard_summary["ai_vulnerable"],
+        "AI 보조 안전": dashboard_summary["ai_safe"],
+        "AI 판정 불가": dashboard_summary["ai_inconclusive"],
+        "공식근거 확보": 0,
+        "공식근거 부족": dashboard_summary["ai_insufficient"],
+        "공식근거 검증 실패": dashboard_summary["ai_grounded"],
         "AI 처리 실패": dashboard_summary["ai_failed"],
         "수동 검토 필요": dashboard_summary["needs_human_review"],
         "규칙 취약 의심": dashboard_summary["rule_suspected"],

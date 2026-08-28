@@ -13,6 +13,7 @@ from streamlit.testing.v1 import AppTest
 
 import dashboard.app as dashboard_app
 from dashboard.app import (
+    _ai_error_breakdown,
     _available_processed_results,
     _build_filtered_evaluation,
     _display_ai_verdict,
@@ -37,6 +38,7 @@ from dashboard.metrics import (
     build_summary,
     build_type_counts,
 )
+from orchestration import deployment_registry
 from orchestration.models import ExecutionStage, ExecutionStatus, RunError, RunRequest
 from orchestration.run_store import RunStore
 
@@ -48,6 +50,13 @@ GROUND_TRUTH_PATH = (
     Path(__file__).resolve().parents[1] / "configs" / "ground-truth.example.json"
 )
 PROCESSED_PATH = Path(__file__).resolve().parents[1] / "data" / "processed"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_registered_deployments(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        deployment_registry, "list_registered_deployments", lambda _: []
+    )
 
 
 def _terminal_run(store: RunStore, initial, status: ExecutionStatus) -> None:
@@ -346,12 +355,12 @@ def test_dashboard_renders_conditional_sqli_evaluation() -> None:
         }
     }
     assert evaluation_metrics == {
-        "Accuracy": "N/A",
-        "Precision": "N/A",
-        "Recall": "N/A",
+        "Accuracy": "100.0%",
+        "Precision": "100.0%",
+        "Recall": "100.0%",
         "N_labeled": "4",
-        "N_scored": "0",
-        "Scored coverage": "0.0%",
+        "N_scored": "1",
+        "Scored coverage": "25.0%",
     }
 
 
@@ -511,10 +520,12 @@ def test_dashboard_distinguishes_zero_run_from_filter_reset() -> None:
 
         assert [(metric.label, metric.value) for metric in app.metric] == [
             ("전체 Finding", "0"),
-            ("AI 보조 취약 판정", "0"),
-            ("AI 보조 판정 불가", "0"),
-            ("수동 검토 필요", "0"),
+            ("AI 보조 취약", "0"),
+            ("AI 보조 안전", "0"),
+            ("AI 판정 불가", "0"),
+            ("공식근거 확보", "0"),
             ("AI 처리 실패", "0"),
+            ("수동 검토 필요", "0"),
             ("규칙 취약 의심", "0"),
         ]
         assert len(app.get("download_button")) == 1
@@ -619,7 +630,7 @@ def test_findings_dataframe_flattens_evidence_and_legacy_defaults() -> None:
     assert grounded["reference_count"] == 1
     assert json.loads(grounded["claims_json"])[0]["claim_id"] == "C1"
     assert json.loads(grounded["references_json"])[0]["reference_id"] == "R1"
-    assert grounded["provenance_model"] == "gpt-5"
+    assert grounded["provenance_model"] == "gpt-4o-mini"
 
     payload["schema_version"] = "1.0"
     payload["status"] = "COMPLETED"
@@ -784,7 +795,33 @@ def test_partial_banner_uses_unfiltered_full_run_counts() -> None:
         f"스캔 실패 {summary['scan_failed']}건 · "
         f"AI 미요청 {summary['ai_not_requested']}건 · "
         f"AI 실패 {summary['ai_failed']}건 · "
+        "AI 실패 코드 AI_TIMEOUT 1건 · "
         f"수동 검토 필요 {summary['needs_human_review']}건"
     )
     assert expected_counts in warning
     assert filtered_warning == warning
+
+
+def test_partial_ai_error_breakdown_uses_only_canonical_codes() -> None:
+    run = load_processed_data(SAMPLE_PATH)
+
+    assert _ai_error_breakdown(run) == {"AI_TIMEOUT": 1}
+
+
+def test_sample_summary_separates_grounded_ai_assistance_labels() -> None:
+    summary = build_summary(findings_to_dataframe(load_processed_data(SAMPLE_PATH)))
+
+    assert {
+        key: summary[key]
+        for key in (
+            "ai_vulnerable",
+            "ai_safe",
+            "ai_inconclusive",
+            "ai_grounded",
+        )
+    } == {
+        "ai_vulnerable": 2,
+        "ai_safe": 1,
+        "ai_inconclusive": 1,
+        "ai_grounded": 3,
+    }

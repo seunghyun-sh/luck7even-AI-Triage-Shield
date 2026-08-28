@@ -63,13 +63,22 @@ def build_summary(df: pd.DataFrame) -> dict[str, int]:
 
     _require_columns(
         df,
-        ["ai_status", "ai_label", "needs_human_review", "scan_status", "rule_label"],
+        [
+            "ai_status",
+            "ai_label",
+            "needs_human_review",
+            "scan_status",
+            "rule_label",
+        ],
     )
     if df.empty:
         return {
             "total_findings": 0,
             "ai_vulnerable": 0,
+            "ai_safe": 0,
             "ai_inconclusive": 0,
+            "ai_grounded": 0,
+            "ai_insufficient": 0,
             "scan_completed": 0,
             "scan_failed": 0,
             "ai_completed": 0,
@@ -83,14 +92,26 @@ def build_summary(df: pd.DataFrame) -> dict[str, int]:
         "total_findings": len(df),
         "ai_vulnerable": int(
             (
-                (df["ai_status"] == _AI_COMPLETED)
-                & (df["ai_label"] == "VULNERABLE")
+                (df["ai_status"] == _AI_COMPLETED) & (df["ai_label"] == "VULNERABLE")
             ).sum()
+        ),
+        "ai_safe": int(
+            ((df["ai_status"] == _AI_COMPLETED) & (df["ai_label"] == "SAFE")).sum()
         ),
         "ai_inconclusive": int(
             (
                 (df["ai_status"] == _AI_COMPLETED) & (df["ai_label"] == "INCONCLUSIVE")
             ).sum()
+        ),
+        "ai_grounded": int(
+            df.get("grounding_status", pd.Series(index=df.index, dtype="object"))
+            .eq("GROUNDED")
+            .sum()
+        ),
+        "ai_insufficient": int(
+            df.get("grounding_status", pd.Series(index=df.index, dtype="object"))
+            .eq("INSUFFICIENT")
+            .sum()
         ),
         "scan_completed": int((df["scan_status"] == _SCAN_COMPLETED).sum()),
         "scan_failed": int((df["scan_status"] == _SCAN_FAILED).sum()),

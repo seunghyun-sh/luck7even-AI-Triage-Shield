@@ -30,10 +30,10 @@ from dashboard.metrics import (
     build_type_counts,
 )
 from dashboard.report_builder import build_excel_report
+from orchestration import deployment_registry
 from orchestration.deployment_registry import (
     DEFAULT_DEPLOYMENTS_PATH,
     DeploymentRegistryError,
-    list_registered_deployments,
     parse_deployment_descriptor,
     register_deployment,
     resolve_deployment_manifest,
@@ -189,6 +189,17 @@ def _run_metadata(run: Any) -> dict[str, Any]:
         "started_at": run.started_at.isoformat(),
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
     }
+
+
+def _ai_error_breakdown(run: Any) -> dict[str, int]:
+    """Count failed AI findings by their validated, canonical error code."""
+
+    counts: dict[str, int] = {}
+    for finding in run.findings:
+        error = finding.ai.error
+        if finding.ai.status.value == "FAILED" and error is not None:
+            counts[error.code] = counts.get(error.code, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _apply_filters(df: pd.DataFrame) -> pd.DataFrame:
@@ -464,7 +475,7 @@ def _render_detail(df: pd.DataFrame) -> None:
     with ai_tab:
         st.write(
             f"AI 상태: **{_display_enum('ai_status', finding['ai_status'])}** · "
-            f"AI 보조 판정: **{_display_enum('ai_label', finding['ai_label'])}** · "
+            f"AI 보조 분류: **{_display_enum('ai_label', finding['ai_label'])}** · "
             f"Confidence: **{_text(finding['confidence'])}**"
         )
         grounding_status = _text(finding.get("grounding_status"))
@@ -790,7 +801,7 @@ def _load_inputs() -> tuple[Any | None, Any | None]:
 
 
 def _available_deployments() -> list[Any]:
-    return list_registered_deployments(DEFAULT_DEPLOYMENTS_PATH)
+    return deployment_registry.list_registered_deployments(DEFAULT_DEPLOYMENTS_PATH)
 
 
 def _safe_processed_path(scan_run_id: str) -> Path | None:
@@ -1157,11 +1168,18 @@ def _render_review_tab() -> None:
     findings = findings_to_dataframe(run)
     if run.status.value == "PARTIAL":
         full_summary = build_summary(findings)
+        error_breakdown = _ai_error_breakdown(run)
+        error_summary = (
+            " · ".join(f"{code} {count}건" for code, count in error_breakdown.items())
+            if error_breakdown
+            else "상세 코드 없음"
+        )
         st.warning(
             "부분 완료 실행입니다. 필터 적용 전 전체 Finding 기준 · "
             f"스캔 실패 {full_summary['scan_failed']}건 · "
             f"AI 미요청 {full_summary['ai_not_requested']}건 · "
             f"AI 실패 {full_summary['ai_failed']}건 · "
+            f"AI 실패 코드 {error_summary} · "
             f"수동 검토 필요 {full_summary['needs_human_review']}건"
         )
     filtered = _apply_filters(findings)
@@ -1177,14 +1195,16 @@ def _render_review_tab() -> None:
     summary = build_summary(filtered)
     card_specs = [
         ("전체 Finding", "total_findings"),
-        ("AI 보조 취약 판정", "ai_vulnerable"),
-        ("AI 보조 판정 불가", "ai_inconclusive"),
-        ("수동 검토 필요", "needs_human_review"),
+        ("AI 보조 취약", "ai_vulnerable"),
+        ("AI 보조 안전", "ai_safe"),
+        ("AI 판정 불가", "ai_inconclusive"),
+        ("공식근거 확보", "ai_grounded"),
         ("AI 처리 실패", "ai_failed"),
+        ("수동 검토 필요", "needs_human_review"),
         ("규칙 취약 의심", "rule_suspected"),
     ]
     st.markdown("<p class='section-label'>활성 범위 요약</p>", unsafe_allow_html=True)
-    for column, (label, key) in zip(st.columns(6), card_specs):
+    for column, (label, key) in zip(st.columns(8), card_specs):
         column.metric(label, _format_metric(summary.get(key, summary.get("total", 0))))
 
     if not filtered.empty:
