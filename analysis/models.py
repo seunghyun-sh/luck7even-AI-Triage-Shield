@@ -551,12 +551,14 @@ class AiResult(ContractModel):
                     or any(
                         value is not None
                         for value in (
+                            self.source_evidence,
                             self.impact,
                             self.recommendation,
                             self.manual_check,
                             self.report_paragraph,
                         )
                     )
+                    or self.claims
                     or self.references
                     or self.provenance is None
                 ):

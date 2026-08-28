@@ -105,6 +105,19 @@ def _component_available(
         return False
 
 
+def _ai_triage_ready(importer: ModuleImporter) -> bool:
+    try:
+        module = importer("analysis.ai_triage")
+        triage = getattr(module, "triage", None)
+        readiness = getattr(module, "check_readiness", None)
+        if not callable(triage) or not callable(readiness):
+            return False
+        readiness()
+        return True
+    except Exception:  # noqa: BLE001 - plugin/config boundary returns safe readiness only
+        return False
+
+
 def _data_root_writable(data_root: Path) -> bool:
     return data_root.is_dir() and os.access(data_root, os.W_OK | os.X_OK)
 
@@ -165,7 +178,7 @@ def run_preflight(
                 )
             )
 
-    ai_ready = _component_available(module_importer, "analysis.ai_triage", "triage")
+    ai_ready = _ai_triage_ready(module_importer)
     checks.append(
         _check(
             "AI triage",

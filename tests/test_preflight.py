@@ -42,7 +42,11 @@ def _manifest() -> TargetManifest:
 
 def _importer(name: str) -> SimpleNamespace:
     assert name in {"scanners.xss", "analysis.ai_triage"}
-    return SimpleNamespace(scan=lambda: None, triage=lambda: None)
+    return SimpleNamespace(
+        scan=lambda: None,
+        triage=lambda: None,
+        check_readiness=lambda: None,
+    )
 
 
 def _codes(result) -> set[str]:
@@ -105,6 +109,34 @@ def test_preflight_blocks_missing_components(tmp_path: Path) -> None:
     )
 
     assert {"SCANNER_UNAVAILABLE", "AI_TRIAGE_UNAVAILABLE"} <= _codes(result)
+
+
+def test_preflight_blocks_invalid_ai_configuration_without_leaking_details(
+    tmp_path: Path,
+) -> None:
+    def importer(name: str) -> SimpleNamespace:
+        if name == "scanners.xss":
+            return SimpleNamespace(scan=lambda: None)
+
+        def broken_readiness() -> None:
+            raise RuntimeError("api_key=secret /private/path")
+
+        return SimpleNamespace(
+            triage=lambda: None,
+            check_readiness=broken_readiness,
+        )
+
+    result = run_preflight(
+        _manifest(),
+        ["XSS"],
+        tmp_path,
+        http_requester=lambda *args, **kwargs: SimpleNamespace(status_code=200),
+        module_importer=importer,
+    )
+
+    ai = next(check for check in result.checks if check.name == "AI triage")
+    assert ai.code == "AI_TRIAGE_UNAVAILABLE"
+    assert "secret" not in ai.message
 
 
 def test_preflight_normalizes_arbitrary_component_initialization_error(

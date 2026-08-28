@@ -204,14 +204,14 @@ OpenAI·데이터 처리 담당은 다음 순서로 처리한다.
 
 1. raw envelope와 모든 Finding을 검증한다.
 2. 정책에 따라 AI 후보를 선택한다.
-3. 응답 HTML에서 판정에 필요한 근거만 allowlist 방식으로 추출한다.
-4. 쿠키, 인증 헤더, 개인정보와 불필요한 본문을 deterministic하게 제거한다.
-5. 입력 길이를 제한하고 외부 응답은 신뢰할 수 없는 데이터로 명확히 구획한다.
-6. 취약점 유형별 프롬프트로 구조화된 AI 판정을 수행한다.
-7. 응답 스키마를 검증하고 항목별 실패를 격리한다.
-8. 후보가 아닌 항목을 포함한 모든 raw Finding을 processed 결과에 1:1 보존한다.
+3. `RawRun`의 구조화 필드만으로 E1(규칙 근거), E2(응답 요약), E3(HTTP·시간), E4(요청 요약)를 결정적으로 만든다. sidecar HTML 파일은 열지 않는다.
+4. URL은 origin+path만 유지하고 payload·증거에는 이메일, 전화번호, JWT, token, 카드번호를 마스킹한다.
+5. XSS는 반사·context·stored 확인, SQLi는 DB error·boolean/response delta·timing에 집중하는 별도 프롬프트를 사용한다. 모든 scanner 입력과 검색 문서는 untrusted data로 구획한다.
+6. `responses.parse`와 File Search로 구조화 claim을 받고, 실제 검색 file ID와 message citation의 교집합 및 private KB manifest만 공식 참조로 인정한다.
+7. 앱이 C#/R#와 참조 metadata를 부여하고 생성 문장에 E#/R#를 조립한다. 모델의 metadata는 사용하지 않는다.
+8. 검색·인용이 없으면 `INSUFFICIENT/POLICY_EXCLUDED`로 완료하며, 후보가 아닌 항목을 포함한 모든 raw Finding을 processed 결과에 1:1 보존한다.
 
-AI는 다음 분석 정보만 생성한다.
+AI는 최종 취약/안전 판정을 생성하지 않는다. `GROUNDED` 결과도 `INCONCLUSIVE`, confidence `null`, human review 필수이며, 다음 근거 기반 claim만 생성한다.
 
 - 판정 label과 confidence
 - 수동 검토 필요 여부

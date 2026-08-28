@@ -228,6 +228,32 @@ def test_evidence_grounded_statuses_are_valid_in_schema_1_1_fixture() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("source_evidence", "unverified draft evidence"),
+        (
+            "claims",
+            [
+                {
+                    "claim_id": "C1",
+                    "claim_type": "OBSERVATION",
+                    "text": "unverified claim",
+                    "evidence_ids": ["E1"],
+                    "reference_ids": [],
+                }
+            ],
+        ),
+    ],
+)
+def test_insufficient_evidence_rejects_draft_content(field: str, value: object) -> None:
+    payload = _processed_payload()
+    payload["findings"][1]["ai"][field] = value
+
+    with pytest.raises(ValidationError, match="insufficient evidence"):
+        ProcessedRun.model_validate(payload)
+
+
 def test_evidence_claims_reject_orphan_references_and_invalid_evidence_ids() -> None:
     orphan_reference_payload = _processed_payload()
     orphan_reference_payload["findings"][0]["ai"]["claims"][0]["reference_ids"] = [
