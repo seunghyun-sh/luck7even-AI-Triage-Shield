@@ -402,12 +402,16 @@ data/processed/<scan_run_id>/results.json
   검토할 수 있지만 출처 없는 기존 초안으로 명시한다.
 - `triage(raw_run, on_progress) -> ProcessedRun`은 파일을 직접 게시하지 않으며 raw
   Finding과 scan facts를 1:1 보존한다.
-- cache miss 후보를 XSS·SQLi family로 묶고 family마다 completed File Search를
-  한 번 실행한다. message citation·검색 결과·private KB manifest 교집합에 포함된
-  passage만 최대 8건의 별도 `responses.parse` batch가 공유한다.
-- batch는 최대 동시성 2, finding ID exact-set, finding-scoped evidence ID와
+- cache miss 후보는 XSS·SQLi family별 reviewed grounding pack을 기본으로 하고
+  exact-binding cache 또는 manifest SHA-256과 일치하는 로컬 공식문서 passage로
+  보강한다. pack exact file digest는 외부 private 설정으로 검증한다.
+- 최대 16건의 `responses.parse` compact batch는 동시성 3, finding ID exact-set,
+  finding-scoped evidence ID와
   JSON encoded input cap을 강제한다. valid batch envelope의 item별 근거 오류는
   해당 Finding만 실패시키며 envelope 자체가 invalid이면 해당 batch만 실패한다.
+- 모델은 label·confidence·C1 관찰·reviewed guidance ID만 생성한다. C2 영향,
+  C3 권고, C4 수동 검증과 공식 reference metadata는 검증된 pack·manifest에서
+  애플리케이션이 조립한다. Runtime은 File Search를 호출하지 않는다.
 - `on_progress(completed, total, detail)`은 AI 후보 기준 절대 완료 수와 내부 고정
   detail을 전달한다. provider 원문·payload·오류 메시지는 detail에 포함하지 않는다.
 - `GROUNDED` AI 보조 분류는 `VULNERABLE`, `SAFE`, `INCONCLUSIVE`와

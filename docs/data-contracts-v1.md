@@ -312,6 +312,13 @@ allowlist 도메인 URL이어야 한다.
 `vector_store_ids`, `retrieved_file_ids`, timezone이 있는 `generated_at`을
 기록한다.
 
+로컬 hybrid grounding 신규 결과는 `retrieval_mode`,
+`grounding_bundle_digest`, `grounding_pack_version`도 모두 기록한다.
+`retrieval_mode`는 `REVIEWED_PACK`,
+`REVIEWED_PACK_PLUS_VERIFIED_CACHE`,
+`REVIEWED_PACK_PLUS_LOCAL_SEARCH` 중 하나다. 세 필드는 모두 존재하거나 모두
+없어야 하며 기존 File Search artifact는 세 필드 없이 계속 읽을 수 있다.
+
 | AI 상태와 grounding 상태 | 필수 불변 조건 |
 | --- | --- |
 | `COMPLETED` + `GROUNDED` | `label=VULNERABLE/SAFE/INCONCLUSIVE`, confidence 필수, human review 필수, `status_reason/error=null`, 모든 생성 문장 nonblank, claims와 references가 각각 하나 이상, provenance 필수 |

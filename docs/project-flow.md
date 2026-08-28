@@ -206,10 +206,10 @@ OpenAI·데이터 처리 담당은 다음 순서로 처리한다.
 2. 정책에 따라 AI 후보를 선택한다.
 3. `RawRun`의 구조화 필드만으로 E1(규칙 근거), E2(응답 요약), E3(HTTP·시간), E4(요청 요약)를 결정적으로 만든다. sidecar HTML 파일은 열지 않는다.
 4. URL은 origin+path만 유지하고 payload·증거에는 이메일, 전화번호, JWT, token, 카드번호를 마스킹한다.
-5. XSS는 반사·context·stored 확인, SQLi는 DB error·boolean/response delta·timing에 집중하는 별도 프롬프트를 사용한다. 모든 scanner 입력과 검색 문서는 untrusted data로 구획한다.
-6. 첫 Responses 호출은 File Search와 검색 결과·message citation을 수집하고, 두 번째 `responses.parse` 호출은 검증·제한된 검색 passage만 받아 구조화 claim을 생성한다. 실제 검색 file ID와 citation의 교집합 및 private KB manifest만 공식 참조로 인정한다.
-7. 앱이 C#/R#와 참조 metadata를 부여하고 생성 문장에 E#/R#를 조립한다. 모델의 metadata는 사용하지 않는다.
-8. 검색·인용이 없으면 `INSUFFICIENT/POLICY_EXCLUDED`로 완료하며, 후보가 아닌 항목을 포함한 모든 raw Finding을 processed 결과에 1:1 보존한다.
+5. XSS는 실행 가능한 context, SQLi는 DB-specific error·boolean delta·timing에 집중하는 별도 compact 프롬프트를 사용한다. 모든 scanner 입력과 reviewed passage는 untrusted data로 구획한다.
+6. Runtime은 외부 File Search 대신 외부 digest로 인증된 reviewed family pack을 기본으로 하고, fresh exact cache 또는 SHA-256 검증 로컬 공식문서 passage로 보강한다.
+7. 모델은 label·confidence·C1 관찰과 허용된 guidance ID만 반환한다. 앱이 reviewed template으로 C2 영향·C3 권고·C4 수동 검증, C#/R#와 manifest reference metadata를 조립한다.
+8. 최대 16건·동시성 3으로 처리하고, 근거 pack을 검증할 수 없으면 해당 family를 `AI_GROUNDING_UNAVAILABLE`로 실패시킨다. 모든 raw Finding은 processed 결과에 1:1 보존한다.
 
 AI는 최종 승인자가 아니라 2차 보조 분류기다. `GROUNDED` 결과는
 `VULNERABLE`, `SAFE`, `INCONCLUSIVE`와 confidence를 생성할 수 있지만 human

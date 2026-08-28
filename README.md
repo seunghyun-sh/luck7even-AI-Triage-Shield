@@ -128,7 +128,11 @@ pip install -r requirements.txt
 
 로컬 `.env` 파일에 `OPENAI_API_KEY`와 `AI_TRIAGE_MODEL`을 설정합니다. 현재 저장소에는 `.env.example`이 포함되어 있지 않습니다. API 키, 비밀번호, 세션 키, AWS 계정 정보, 고정 IP, 개인정보가 포함된 원본 응답은 커밋하지 않습니다.
 
-AI triage는 Responses API File Search와 검증된 공식 문서 manifest가 모두 준비되어야 실행됩니다. `configs/knowledge-base.example.json`의 형식을 참고해 실제 Vector Store·File ID가 포함된 `configs/knowledge-base.local.json`을 비공개로 작성합니다. 이 파일은 Git에서 제외되며 OWASP·KISA HTTPS 자료만 허용합니다. 대시보드 사전점검은 API key, model, manifest가 하나라도 없거나 잘못되면 실행을 차단합니다.
+AI triage는 검증된 공식 문서 manifest, SHA-256이 고정된 로컬 OWASP·KISA 원문,
+사람이 검토한 family grounding pack이 모두 준비되어야 실행됩니다.
+`data/cache/grounding-packs.json`은 비공개로 배포하고 exact file SHA-256을
+`AI_GROUNDING_PACK_SHA256`에 설정합니다. Runtime은 File Search에 의존하지 않으며
+pack·manifest·원문 hash가 하나라도 맞지 않으면 사전점검을 차단합니다.
 
 ```text
 RawRun 1.0
@@ -136,10 +140,11 @@ RawRun 1.0
   → ProcessedRun 1.1
 ```
 
-AI 후보는 XSS·SQLi family별로 공식 근거를 한 번 검색하고 최대 8건씩 묶어
-동시성 2로 보조 분류합니다. 정상 cold-cache 193건은 기존 386회 요청 대신
-File Search 2회와 structured synthesis 25회로 처리합니다. Dashboard는 실제
-후보 수, 완료 수, 공식 근거 검색과 AI batch 처리 상태를 표시합니다.
+AI 후보는 reviewed family pack을 기본 근거로 사용하고, exact cache 또는
+SHA-256 검증 로컬 공식문서 검색으로 보강합니다. 최대 16건씩 동시성 3으로 compact
+보조 분류하며 정상 cold-cache 193건은 File Search 없이 structured synthesis
+13회로 처리합니다. AI는 label·confidence·관찰·guidance ID를 반환하고 C2 영향,
+C3 권고, C4 수동 검증 문장은 reviewed template에서 결정적으로 조립합니다.
 
 AI는 최종 승인자가 아니라 2차 보조 분류기입니다. 실제 검색 결과·citation·manifest가 일치하는 `GROUNDED` 결과에서만 `VULNERABLE`, `SAFE`, `INCONCLUSIVE`와 confidence를 생성하며, 모든 결과는 사람 검토가 필요합니다. 공식 근거가 부족하면 `INSUFFICIENT`·`INCONCLUSIVE`로 기록하고 권고·보고서 문장을 생성하지 않습니다.
 
