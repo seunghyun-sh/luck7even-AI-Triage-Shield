@@ -116,6 +116,7 @@ def run_preflight(
     *,
     http_requester: HttpRequester = httpx.get,
     module_importer: ModuleImporter = importlib.import_module,
+    target_identity_verified: bool = False,
 ) -> PreflightResult:
     """Check launch prerequisites without invoking scanners or sending payloads."""
 
@@ -176,16 +177,19 @@ def run_preflight(
         )
     )
 
-    try:
-        response = http_requester(
-            _health_url(manifest),
-            timeout=HEALTH_TIMEOUT_SECONDS,
-            follow_redirects=False,
-            headers={},
-        )
-        target_ready = response.status_code == 200
-    except (httpx.HTTPError, OSError, RuntimeError):
-        target_ready = False
+    if target_identity_verified:
+        target_ready = True
+    else:
+        try:
+            response = http_requester(
+                _health_url(manifest),
+                timeout=HEALTH_TIMEOUT_SECONDS,
+                follow_redirects=False,
+                headers={},
+            )
+            target_ready = response.status_code == 200
+        except (httpx.HTTPError, OSError, RuntimeError):
+            target_ready = False
     checks.append(
         _check(
             "대상 서버",

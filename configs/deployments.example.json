@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "deployments": [
+    {
+      "schema_version": "1.0",
+      "deployment_id": "example-local-lab",
+      "display_name": "Example Local Lab",
+      "target_set_id": "local-lab-v1",
+      "service": "example-service",
+      "base_url": "http://127.0.0.1:5000",
+      "health_path": "/health",
+      "database_engine": "sqlite",
+      "deployment_version": "1.0.0",
+      "lifecycle": "TEMPORARY",
+      "verified_at": "2026-01-01T00:00:00+00:00"
+    }
+  ]
+}

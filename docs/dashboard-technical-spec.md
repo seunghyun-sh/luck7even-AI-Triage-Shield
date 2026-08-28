@@ -25,6 +25,8 @@ Streamlit 코드에 데이터 검증, 지표 산식과 Excel 생성 로직을 �
 | 용도 | 경로 |
 | --- | --- |
 | target manifest 샘플 | `configs/targets.example.json` |
+| deployment descriptor 샘플 | `configs/deployments.example.json` |
+| 검증된 로컬 deployment registry | `configs/deployments.local.json` (Git 제외) |
 | raw 샘플 | `configs/raw-findings.example.json` |
 | processed 샘플 | `configs/triaged-results.example.json` |
 | ground-truth 샘플 | `configs/ground-truth.example.json` |
@@ -57,8 +59,9 @@ Streamlit 코드에 데이터 검증, 지표 산식과 Excel 생성 로직을 �
 - `FAILED`: 오류 표시만 허용하고 지표·Excel 차단
 
 자동 발견과 terminal CTA는 `RunStore.load_reviewable_processed_run(scan_run_id)`의
-결합 검증을 통과한 final path만 읽는다. 이 검증은 request·status·processed
-envelope의 `scan_run_id`와 `target_set_id`가 모두 같고, status와 envelope의 값이
+결합 검증을 통과한 final path만 읽는다. 이 검증은 request·status의
+`scan_run_id`, `target_set_id`, `deployment_id`가 같고 processed envelope의
+`scan_run_id`, `target_set_id`가 일치하며, status와 envelope의 값이
 동일한 `COMPLETED` 또는 `PARTIAL`인지 확인한다. 경로는 정확히
 `processed/<scan_run_id>/results.json`이어야 하며 data root 안의 기존 일반 파일이어야
 한다. `FAILED`, 잘못된 JSON, 불일치 envelope 및 symlink escape는 자동 검토 후보와

@@ -157,11 +157,18 @@ registry에서 허가·재검증한 대상 주소만 `ScanContext.base_url`로 �
 ### 4. 등록 대상 통합 진단 실행
 
 ```bash
-python main.py run --target-set-id local-lab-v1 --types XSS SQLI
+python main.py run \
+  --target-set-id novastream-2 \
+  --deployment-id novastream-aws-mysql-v1 \
+  --types XSS SQLI
 ```
 
-허가 대상은 `configs/target-registry.json`에 등록하며, 실행 시 manifest ID와
-`base_url` allowlist를 다시 검증한 뒤 스캐너·AI 처리·결과 저장 파이프라인을 실행합니다.
+진단 케이스는 `configs/target-registry.json`에 등록합니다. 실제 구축환경 주소는
+환경구축팀이 비공개로 전달한 Deployment Descriptor JSON을 대시보드의
+`배포환경 관리`에서 업로드합니다. 대시보드는 `/health` identity를 검증한 뒤
+Git에서 제외된 `configs/deployments.local.json`에 등록하고, 허가된 deployment만
+`ScanContext.base_url`로 전달합니다. MVP는 public 또는 loopback literal IP origin만
+허용하며 실행 화면에는 임의 URL 입력을 제공하지 않습니다.
 
 ### 4-1. 파이프라인용 XSS 스캐너 (`scanners.xss.scan`)
 
@@ -180,7 +187,8 @@ def scan(targets: list[TargetCase], context: ScanContext, on_progress: ProgressC
 | 1번 (Lumi Market) | `lumi-market-1` | `configs/lumi_market_1_xss_targets.example.json` | Reflected: `GET /search` query `q` · Stored: `POST /reviews` form `content` (같은 `/reviews`에서 확인) |
 | 2번 (NovaStream) | `novastream-2` | `configs/novastream_2_xss_targets.example.json` | Reflected: `GET /discover` query `q` · Stored: `POST /titles/1/reviews` form `body` (다른 페이지 `GET /admin/reviews`에서 확인) |
 
-두 매니페스트 모두 `configs/target-registry.json`에 등록되어 있고(등록된 `base_url`과 매니페스트 자체의 `base_url`이 정확히 일치해야 함), 지금은 로컬 주소를 가리킵니다. 이후 서버에 배포되면 이 두 값을 실제 서버 주소로 갱신하면 됩니다.
+두 매니페스트 모두 `configs/target-registry.json`에 등록되어 있습니다. manifest의
+로컬 주소는 진단 케이스 예시이며, 실제 실행 주소는 검증된 deployment가 덮어씁니다.
 
 **런타임 페이로드는 검토된 checked-in profile입니다.** 실행 계약은 "런타임
 스캐너는 OpenAI API를 호출하지 않는다"고 명시합니다. 따라서 런타임은

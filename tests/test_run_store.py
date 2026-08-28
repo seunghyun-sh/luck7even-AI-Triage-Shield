@@ -22,6 +22,7 @@ from orchestration.run_store import RunAlreadyActiveError, RunStore
 SAMPLE_PROCESSED_PATH = (
     Path(__file__).resolve().parents[1] / "configs" / "triaged-results.example.json"
 )
+DEPLOYMENT_ID = "local-lab-deployment"
 
 
 def _status(
@@ -37,6 +38,7 @@ def _status(
     return RunStatusDocument(
         scan_run_id="run-20260827-111500-a1b2c3",
         target_set_id="local-lab-v1",
+        deployment_id=DEPLOYMENT_ID,
         requested_vuln_types=["XSS", "SQLI"],
         status=status,
         stage=stage,
@@ -52,7 +54,11 @@ def _status(
 
 def _publish_reviewable_partial(store: RunStore) -> tuple[RunStatusDocument, Path]:
     initial = store.create_run(
-        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id=DEPLOYMENT_ID,
+            vuln_types=["XSS"],
+        )
     )
     running_time = initial.updated_at + timedelta(seconds=1)
     running = initial.model_copy(
@@ -106,7 +112,11 @@ def test_status_rejects_unsafe_artifact_paths(path: str) -> None:
 
 def test_models_reject_duplicate_vulnerability_types_and_invalid_run_id() -> None:
     with pytest.raises(ValidationError):
-        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS", "XSS"])
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id=DEPLOYMENT_ID,
+            vuln_types=["XSS", "XSS"],
+        )
 
     payload = _status().model_dump(mode="json")
     payload["scan_run_id"] = "../not-a-run"
@@ -146,13 +156,18 @@ def test_models_enforce_progress_and_terminal_invariants() -> None:
 def test_run_store_creates_and_atomically_round_trips_status(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "data")
     created = store.create_run(
-        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS", "SQLI"])
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id=DEPLOYMENT_ID,
+            vuln_types=["XSS", "SQLI"],
+        )
     )
 
     run_dir = tmp_path / "data" / "runs" / created.scan_run_id
     assert json.loads((run_dir / "request.json").read_text(encoding="utf-8")) == {
         "schema_version": "1.0",
         "target_set_id": "local-lab-v1",
+        "deployment_id": DEPLOYMENT_ID,
         "vuln_types": ["XSS", "SQLI"],
     }
     assert store.load_status(created.scan_run_id) == created
@@ -186,7 +201,11 @@ def test_run_store_creates_and_atomically_round_trips_status(tmp_path: Path) -> 
 def test_run_store_rejects_invalid_stage_and_terminal_mutation(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "data")
     queued = store.create_run(
-        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id=DEPLOYMENT_ID,
+            vuln_types=["XSS"],
+        )
     )
 
     invalid_start = queued.model_copy(
@@ -231,12 +250,16 @@ def test_run_store_rejects_invalid_stage_and_terminal_mutation(tmp_path: Path) -
         }
     )
     store.save_status(failed)
-    changed_terminal = failed.model_copy(update={"progress": Progress(completed=0, total=1)})
+    changed_terminal = failed.model_copy(
+        update={"progress": Progress(completed=0, total=1)}
+    )
     with pytest.raises(ValueError, match="cannot be modified"):
         store.save_status(changed_terminal)
 
 
-def test_pipeline_lock_rejects_duplicate_and_releases_owned_lock(tmp_path: Path) -> None:
+def test_pipeline_lock_rejects_duplicate_and_releases_owned_lock(
+    tmp_path: Path,
+) -> None:
     store = RunStore(tmp_path / "data")
     run_id = "run-20260827-111500-a1b2c3"
     lock_path = tmp_path / "data" / "runs" / ".pipeline.lock"
@@ -267,7 +290,11 @@ def test_pipeline_lock_rejects_duplicate_and_releases_owned_lock(tmp_path: Path)
 def test_stale_lock_metadata_is_not_an_active_lock_or_mutated(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "data")
     status = store.create_run(
-        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id=DEPLOYMENT_ID,
+            vuln_types=["XSS"],
+        )
     )
     lock_path = store.runs_dir / ".pipeline.lock"
     lock_path.write_text(
@@ -286,10 +313,16 @@ def test_stale_lock_metadata_is_not_an_active_lock_or_mutated(tmp_path: Path) ->
     assert lock_path.read_bytes() == original
 
 
-def test_active_run_status_requires_live_lock_and_nonterminal_owner(tmp_path: Path) -> None:
+def test_active_run_status_requires_live_lock_and_nonterminal_owner(
+    tmp_path: Path,
+) -> None:
     store = RunStore(tmp_path / "data")
     status = store.create_run(
-        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id=DEPLOYMENT_ID,
+            vuln_types=["XSS"],
+        )
     )
 
     assert store.active_run_status() is None
@@ -300,7 +333,11 @@ def test_active_run_status_requires_live_lock_and_nonterminal_owner(tmp_path: Pa
 def test_active_run_status_rejects_malformed_or_terminal_owner(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "data")
     status = store.create_run(
-        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id=DEPLOYMENT_ID,
+            vuln_types=["XSS"],
+        )
     )
     lock_path = store.runs_dir / ".pipeline.lock"
 
@@ -328,10 +365,16 @@ def test_active_run_status_rejects_malformed_or_terminal_owner(tmp_path: Path) -
         assert store.active_run_status() is None
 
 
-def test_active_run_status_rejects_owner_status_identity_mismatch(tmp_path: Path) -> None:
+def test_active_run_status_rejects_owner_status_identity_mismatch(
+    tmp_path: Path,
+) -> None:
     store = RunStore(tmp_path / "data")
     status = store.create_run(
-        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id=DEPLOYMENT_ID,
+            vuln_types=["XSS"],
+        )
     )
     mismatched_id = "run-20260827-111501-b2c3d4"
     payload = status.model_dump(mode="json")
@@ -342,6 +385,21 @@ def test_active_run_status_rejects_owner_status_identity_mismatch(tmp_path: Path
             json.dumps(payload), encoding="utf-8"
         )
         assert store.active_run_status() is None
+
+
+def test_run_store_rejects_status_with_mismatched_deployment_id(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "data")
+    created = store.create_run(
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id=DEPLOYMENT_ID,
+            vuln_types=["XSS"],
+        )
+    )
+    mismatched = created.model_copy(update={"deployment_id": "other-deployment"})
+
+    with pytest.raises(ValueError, match="does not match"):
+        store.save_status(mismatched)
 
 
 def test_reviewable_processed_run_requires_coupled_terminal_artifacts(
@@ -393,7 +451,9 @@ def test_reviewable_processed_run_rejects_malformed_and_symlink_artifacts(
 
     symlink_status, path = _publish_reviewable_partial(store)
     outside = tmp_path / "outside-results.json"
-    outside.write_text(SAMPLE_PROCESSED_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    outside.write_text(
+        SAMPLE_PROCESSED_PATH.read_text(encoding="utf-8"), encoding="utf-8"
+    )
     path.unlink()
     path.symlink_to(outside)
 
@@ -406,7 +466,11 @@ def test_reconcile_orphaned_runs_requires_held_local_lock(
 ) -> None:
     store = RunStore(tmp_path / "data")
     status = store.create_run(
-        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id=DEPLOYMENT_ID,
+            vuln_types=["XSS"],
+        )
     )
     lock = store.pipeline_lock(status.scan_run_id)
 
@@ -435,10 +499,18 @@ def test_reconcile_orphaned_runs_fails_old_nonterminal_runs_but_not_owner(
 ) -> None:
     store = RunStore(tmp_path / "data")
     orphan = store.create_run(
-        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id=DEPLOYMENT_ID,
+            vuln_types=["XSS"],
+        )
     )
     owner = store.create_run(
-        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id=DEPLOYMENT_ID,
+            vuln_types=["XSS"],
+        )
     )
 
     with store.pipeline_lock(owner.scan_run_id) as lock:

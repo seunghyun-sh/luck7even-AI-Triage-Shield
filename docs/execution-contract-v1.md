@@ -46,15 +46,20 @@ MVP에서는 스캐너와 OpenAI 처리를 `main.py`가 순서대로 실행한�
 
 ## 4. 허가된 실행 입력
 
-### 4.1 target manifest
+### 4.1 target manifest와 deployment descriptor
 
 실행 대상은 `docs/data-contracts-v1.md` Contract A를 통과한 manifest만 허용한다.
 
-- 저장소 또는 서버 설정에 등록된 manifest만 선택한다.
-- MVP 등록 원장은 `configs/target-registry.json`이며 `target_set_id`, manifest 상대 경로,
-  허가된 `base_url`을 함께 고정한다. CLI와 대시보드는 이 원장을 공통 사용한다.
-- 사용자가 임의 URL, IP 또는 인증정보를 입력해 실행할 수 없게 한다.
-- `base_url`이 허가 목록에 있는지 실행 직전에 다시 검증한다.
+- Git의 `configs/target-registry.json`은 `target_set_id`와 진단 케이스 manifest를 관리한다.
+- 실제 구축환경 주소는 환경구축팀이 비공개로 전달한 Deployment Descriptor JSON으로 등록한다.
+- 대시보드는 descriptor schema와 `/health` identity를 검증한 뒤 Git에서 제외된
+  `configs/deployments.local.json`에 원자적으로 저장한다.
+- MVP의 `base_url`은 DNS rebinding을 차단하기 위해 public 또는 loopback literal IP
+  origin만 허용한다. hostname, link-local, metadata, reserved 주소는 거부한다.
+- `ACTIVE` 또는 `TEMPORARY` deployment만 선택할 수 있다.
+- 실행 시 `deployment_id`로 등록 정보를 다시 해석하고 trusted manifest의
+  `base_url`만 검증된 deployment origin으로 교체한다.
+- 실행 화면에서 임의 URL, IP 또는 인증정보를 직접 입력할 수 없게 한다.
 - 실제 인증정보는 manifest가 아닌 서버 측 `auth_profile` 저장소에서 읽는다.
 
 ### 4.2 실행 요청
@@ -62,7 +67,8 @@ MVP에서는 스캐너와 OpenAI 처리를 `main.py`가 순서대로 실행한�
 ```json
 {
   "schema_version": "1.0",
-  "target_set_id": "local-lab-v1",
+  "target_set_id": "novastream-2",
+  "deployment_id": "novastream-aws-mysql-v1",
   "vuln_types": ["XSS", "SQLI"]
 }
 ```
@@ -71,32 +77,46 @@ MVP에서는 스캐너와 OpenAI 처리를 `main.py`가 순서대로 실행한�
 | --- | --- | --- | --- |
 | `schema_version` | string | 예 | `1.0` |
 | `target_set_id` | string | 예 | 등록된 manifest ID와 정확히 일치 |
+| `deployment_id` | string | 예 | 검증·등록된 deployment ID와 정확히 일치 |
 | `vuln_types` | string array | 예 | `XSS`, `SQLI` 중 하나 이상, 중복 금지 |
 
 MVP에서는 payload 직접 입력, 임의 URL, 동시 실행 수와 AI 모델을 실행 요청으로 받지 않는다.
 
 ### 4.3 실행 전 사전점검
 
-대시보드는 실행 버튼을 활성화하기 전에 검증된 선택 manifest를 대상으로 읽기 전용 사전점검을 수행한다. 이 점검은 스캐너를 호출하거나 공격 payload를 전송하지 않는다.
+대시보드는 실행 버튼을 활성화하기 전에 선택 deployment로 해석한 manifest를 대상으로 읽기 전용 사전점검을 수행한다. 이 점검은 스캐너를 호출하거나 공격 payload를 전송하지 않는다.
 
-- manifest의 `base_url`에만 `/health`를 붙여 GET 요청하고, 1초 이하 timeout, redirect 금지, 인증정보 미전송으로 HTTP `200`만 준비 상태로 판단한다. 응답 본문과 네트워크 예외 원문은 저장하거나 표시하지 않는다.
+- descriptor 등록 시 `/health`가 `target_set_id`, `service`, `database_engine`,
+  `deployment_version`과 일치하는지 검증한다.
+- 실행 preflight는 해석된 manifest의 `base_url`에만 `/health`를 붙여 GET 요청하고,
+  1초 이하 timeout, redirect 금지, 인증정보 미전송으로 HTTP `200`만 준비 상태로 판단한다.
 - 선택한 모든 진단 유형이 manifest에 존재하고, 해당 scanner의 `scan` callable 및 `analysis.ai_triage.triage` callable이 있어야 한다.
 - 전역 pipeline lock이 비활성이며 data root에 쓸 수 있어야 한다.
-- 하나라도 차단되면 대시보드는 원인별 안전한 안내를 표시하고 실행 버튼을 비활성화한다. 버튼 활성화에는 현재 선택 manifest 경로와 유형 fingerprint에 대응하는 사전점검 READY, 하나 이상의 진단 유형 선택, 격리·허가 확인 checkbox, active run 부재가 모두 필요하다. 입력이 바뀌면 이전 사전점검은 stale이며, launch click 직전에 다시 점검해 READY가 아니면 `start_run`을 호출하지 않는다.
+- fingerprint는 `deployment_id`, `deployment_version`, 선택 유형을 포함한다. 입력이 바뀌면
+  이전 preflight는 stale이다.
+- 하나라도 차단되면 실행 버튼을 비활성화하고 launch 직전에 deployment를 다시 해석해 점검한다.
 
 ## 5. Python 실행 인터페이스
 
 대시보드와 CLI는 같은 blocking orchestration core를 사용한다.
 
 ```python
-def run_pipeline(target_set_id: str, vuln_types: list[str]) -> RunStatusDocument:
+def run_pipeline(
+    target_set_id: str,
+    deployment_id: str,
+    vuln_types: list[str],
+) -> RunStatusDocument:
     """terminal 상태까지 실행하고 최종 상태를 반환한다."""
 ```
 
 대시보드는 별도 launcher를 통해 core를 백그라운드 프로세스로 시작한다.
 
 ```python
-def start_run(target_set_id: str, vuln_types: list[str]) -> str:
+def start_run(
+    target_set_id: str,
+    deployment_id: str,
+    vuln_types: list[str],
+) -> str:
     """실행을 시작하고 새 scan_run_id를 반환한다."""
 ```
 
@@ -115,7 +135,8 @@ CLI는 `run_pipeline`을 foreground에서 호출하고 terminal 상태까지 기
 
 ```bash
 python main.py run \
-  --target-set-id local-lab-v1 \
+  --target-set-id novastream-2 \
+  --deployment-id novastream-aws-mysql-v1 \
   --types XSS SQLI
 ```
 
@@ -193,7 +214,8 @@ data/runs/<scan_run_id>/status.json
 {
   "schema_version": "1.0",
   "scan_run_id": "run-20260827-111500-a1b2c3",
-  "target_set_id": "local-lab-v1",
+  "target_set_id": "novastream-2",
+  "deployment_id": "novastream-aws-mysql-v1",
   "requested_vuln_types": ["XSS", "SQLI"],
   "status": "RUNNING",
   "stage": "SCANNING_XSS",
@@ -217,6 +239,7 @@ data/runs/<scan_run_id>/status.json
 | `schema_version` | string | 예 | `1.0` |
 | `scan_run_id` | string | 예 | 실행 디렉터리 ID와 일치 |
 | `target_set_id` | string | 예 | 실행 요청과 일치 |
+| `deployment_id` | string | 예 | 실행 요청과 일치하며 실행 중 변경 불가 |
 | `requested_vuln_types` | string array | 예 | 요청한 유형만 포함 |
 | `status` | string | 예 | 실행 상태 enum |
 | `stage` | string/null | 예 | terminal 이전 현재 단계 |

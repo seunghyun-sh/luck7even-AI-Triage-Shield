@@ -26,6 +26,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--target-set-id", required=True, help="Registered target set identifier."
     )
     run.add_argument(
+        "--deployment-id", required=True, help="Registered deployment identifier."
+    )
+    run.add_argument(
         "--types",
         nargs="+",
         required=True,
@@ -51,9 +54,9 @@ def _unrequested_scanner(*args: object, **kwargs: object) -> None:
     raise RuntimeError("An unrequested scanner was invoked.")
 
 
-def _load_components(vuln_types: list[str]) -> tuple[
-    Callable[..., Any], Callable[..., Any], Callable[..., Any]
-]:
+def _load_components(
+    vuln_types: list[str],
+) -> tuple[Callable[..., Any], Callable[..., Any], Callable[..., Any]]:
     return (
         _component_callable("scanners.xss", "scan")
         if "XSS" in vuln_types
@@ -82,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         final_status = orchestrator.run(
             args.target_set_id,
+            args.deployment_id,
             args.types,
             on_run_created=print,
         )

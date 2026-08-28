@@ -18,6 +18,7 @@ from dashboard.app import (
     _display_enum,
     _display_rule_verdict,
     _load_discovered_processed_run,
+    _preflight_fingerprint,
     _priority_table,
     _processed_display_name,
     _render_charts,
@@ -38,7 +39,9 @@ from orchestration.models import ExecutionStage, ExecutionStatus, RunError, RunR
 from orchestration.run_store import RunStore
 
 APP_PATH = Path(__file__).resolve().parents[1] / "dashboard" / "app.py"
-SAMPLE_PATH = Path(__file__).resolve().parents[1] / "configs" / "triaged-results.example.json"
+SAMPLE_PATH = (
+    Path(__file__).resolve().parents[1] / "configs" / "triaged-results.example.json"
+)
 GROUND_TRUTH_PATH = (
     Path(__file__).resolve().parents[1] / "configs" / "ground-truth.example.json"
 )
@@ -70,7 +73,11 @@ def _terminal_run(store: RunStore, initial, status: ExecutionStatus) -> None:
                     else None
                 ),
                 "error": (
-                    RunError(code="PIPELINE_FAILED", message="Diagnostic failed.", retryable=False)
+                    RunError(
+                        code="PIPELINE_FAILED",
+                        message="Diagnostic failed.",
+                        retryable=False,
+                    )
                     if status is ExecutionStatus.FAILED
                     else None
                 ),
@@ -110,11 +117,23 @@ def _button(app: AppTest, label: str):
     return next(button for button in app.button if button.label == label)
 
 
+def test_preflight_fingerprint_binds_deployment_identity_and_version() -> None:
+    assert _preflight_fingerprint("lab-a", "2026.08.28", ["SQLI", "XSS"]) == (
+        "lab-a",
+        "2026.08.28",
+        ("SQLI", "XSS"),
+    )
+
+
 def test_first_visit_renders_execution_only_without_review_side_effects() -> None:
     app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
 
     assert not app.exception
-    assert any(selectbox.label == "허가된 대상 manifest" for selectbox in app.selectbox)
+    assert any(expander.label == "배포환경 관리" for expander in app.expander)
+    assert any(
+        uploader.label == "Deployment Descriptor JSON" for uploader in app.file_uploader
+    )
+    assert not any(selectbox.label == "허가된 배포환경" for selectbox in app.selectbox)
     assert not app.title
     assert not app.metric
     assert not app.get("download_button")
@@ -126,32 +145,43 @@ def test_navigation_renders_review_only_after_selection() -> None:
 
     assert not app.exception
     assert [title.value for title in app.title] == ["Triage Shield · 취약점 검토 관제"]
-    assert not any(selectbox.label == "허가된 대상 manifest" for selectbox in app.selectbox)
+    assert not any(selectbox.label == "허가된 배포환경" for selectbox in app.selectbox)
     assert len(app.get("download_button")) == 1
 
 
-def test_execution_setup_requires_explicit_preflight_and_shows_blockers() -> None:
+def test_execution_setup_without_registered_deployment_keeps_registration_available() -> (
+    None
+):
     app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
-    app.multiselect[0].set_value(["XSS", "SQLI"]).run(timeout=30)
+    registration_authorization = next(
+        checkbox
+        for checkbox in app.checkbox
+        if checkbox.label
+        == "환경구축팀이 전달한 허가된 격리 진단 환경임을 확인했습니다."
+    )
+    registration_authorization.set_value(True).run(timeout=30)
 
-    assert _button(app, "진단 실행 시작").disabled
-    assert any("격리·허가 확인이 필요합니다." in caption.value for caption in app.caption)
-    _button(app, "준비 상태 확인/새로고침").click().run(timeout=30)
-
-    assert any("준비 " in markdown.value and "차단 " in markdown.value for markdown in app.markdown)
-    assert any("AI triage를 사용할 수 없습니다." in caption.value for caption in app.caption)
-    assert _button(app, "진단 실행 시작").disabled
+    assert _button(app, "배포환경 등록").disabled
+    assert any("ACTIVE 또는 TEMPORARY" in info.value for info in app.info)
 
 
 def test_active_run_is_rediscovered_and_hides_setup_controls() -> None:
     store = RunStore(PROCESSED_PATH.parent)
-    status = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
+    status = store.create_run(
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id="local-lab-deployment",
+            vuln_types=["XSS"],
+        )
+    )
     try:
         with store.pipeline_lock(status.scan_run_id):
             app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
 
             assert not app.exception
-            assert not any(selectbox.label == "허가된 대상 manifest" for selectbox in app.selectbox)
+            assert not any(
+                selectbox.label == "허가된 배포환경" for selectbox in app.selectbox
+            )
             assert any("대기" in markdown.value for markdown in app.markdown)
             assert any(
                 status.scan_run_id in str(element.value) for element in app.get("json")
@@ -162,22 +192,38 @@ def test_active_run_is_rediscovered_and_hides_setup_controls() -> None:
 
 def test_orphaned_nonterminal_run_does_not_hide_execution_setup() -> None:
     store = RunStore(PROCESSED_PATH.parent)
-    orphan = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
+    orphan = store.create_run(
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id="local-lab-deployment",
+            vuln_types=["XSS"],
+        )
+    )
     try:
         app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
 
         assert not app.exception
-        assert any(
-            selectbox.label == "허가된 대상 manifest" for selectbox in app.selectbox
-        )
+        assert any(expander.label == "배포환경 관리" for expander in app.expander)
     finally:
         shutil.rmtree(PROCESSED_PATH.parent / "runs" / orphan.scan_run_id)
 
 
 def test_live_lock_owner_wins_over_orphaned_nonterminal_run() -> None:
     store = RunStore(PROCESSED_PATH.parent)
-    orphan = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
-    live = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
+    orphan = store.create_run(
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id="local-lab-deployment",
+            vuln_types=["XSS"],
+        )
+    )
+    live = store.create_run(
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id="local-lab-deployment",
+            vuln_types=["XSS"],
+        )
+    )
     try:
         with store.pipeline_lock(live.scan_run_id):
             app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
@@ -195,7 +241,13 @@ def test_live_lock_owner_wins_over_orphaned_nonterminal_run() -> None:
 
 def test_rediscovered_active_run_keeps_terminal_handoff_selection() -> None:
     store = RunStore(PROCESSED_PATH.parent)
-    initial = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
+    initial = store.create_run(
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id="local-lab-deployment",
+            vuln_types=["XSS"],
+        )
+    )
     results_path = _write_processed_run(store, initial, ExecutionStatus.PARTIAL)
     try:
         app = AppTest.from_file(str(APP_PATH))
@@ -218,7 +270,13 @@ def test_completed_and_partial_runs_offer_explicit_review_handoff() -> None:
         (ExecutionStatus.PARTIAL, "부분 결과 검토"),
     ):
         store = RunStore(PROCESSED_PATH.parent)
-        initial = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
+        initial = store.create_run(
+            RunRequest(
+                target_set_id="local-lab-v1",
+                deployment_id="local-lab-deployment",
+                vuln_types=["XSS"],
+            )
+        )
         results_path = _write_processed_run(store, initial, terminal_status)
         try:
             _terminal_run(store, initial, terminal_status)
@@ -237,8 +295,20 @@ def test_completed_and_partial_runs_offer_explicit_review_handoff() -> None:
 
 def test_failed_and_unsafe_artifact_runs_do_not_offer_review_handoff() -> None:
     store = RunStore(PROCESSED_PATH.parent)
-    failed = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
-    unsafe = store.create_run(RunRequest(target_set_id="local-lab-v2", vuln_types=["XSS"]))
+    failed = store.create_run(
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id="local-lab-deployment",
+            vuln_types=["XSS"],
+        )
+    )
+    unsafe = store.create_run(
+        RunRequest(
+            target_set_id="local-lab-v2",
+            deployment_id="local-lab-deployment",
+            vuln_types=["XSS"],
+        )
+    )
     try:
         _terminal_run(store, failed, ExecutionStatus.FAILED)
         _terminal_run(store, unsafe, ExecutionStatus.COMPLETED)
@@ -264,7 +334,14 @@ def test_dashboard_renders_conditional_sqli_evaluation() -> None:
         metric.label: metric.value
         for metric in app.metric
         if metric.label
-        in {"Accuracy", "Precision", "Recall", "N_labeled", "N_scored", "Scored coverage"}
+        in {
+            "Accuracy",
+            "Precision",
+            "Recall",
+            "N_labeled",
+            "N_scored",
+            "Scored coverage",
+        }
     }
     assert evaluation_metrics == {
         "Accuracy": "100.0%",
@@ -339,7 +416,9 @@ def test_filter_scoped_evaluation_rejects_full_input_errors_hidden_by_xss_filter
         )
 
 
-def test_filter_scoped_evaluation_allows_empty_sqli_scope_after_full_validation() -> None:
+def test_filter_scoped_evaluation_allows_empty_sqli_scope_after_full_validation() -> (
+    None
+):
     findings, xss_only, ground_truth = _evaluation_inputs()
 
     evaluation = _build_filtered_evaluation(findings, xss_only, ground_truth)
@@ -403,7 +482,13 @@ def test_report_frame_adds_ground_truth_annotations_and_unlabeled_exclusion() ->
 
 def test_dashboard_distinguishes_zero_run_from_filter_reset() -> None:
     store = RunStore(PROCESSED_PATH.parent)
-    initial = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
+    initial = store.create_run(
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id="local-lab-deployment",
+            vuln_types=["XSS"],
+        )
+    )
     results_path = PROCESSED_PATH / initial.scan_run_id / "results.json"
     zero_run = json.loads(SAMPLE_PATH.read_text())
     zero_run.update(
@@ -440,10 +525,18 @@ def test_dashboard_distinguishes_zero_run_from_filter_reset() -> None:
 def test_discovery_prefers_completed_and_honors_preferred_partial() -> None:
     store = RunStore(PROCESSED_PATH.parent)
     completed = store.create_run(
-        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id="local-lab-deployment",
+            vuln_types=["XSS"],
+        )
     )
     partial = store.create_run(
-        RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"])
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id="local-lab-deployment",
+            vuln_types=["XSS"],
+        )
     )
     completed_path = _write_processed_run(store, completed, ExecutionStatus.COMPLETED)
     partial_path = _write_processed_run(store, partial, ExecutionStatus.PARTIAL)
@@ -485,7 +578,9 @@ def test_discovery_prefers_completed_and_honors_preferred_partial() -> None:
         shutil.rmtree(PROCESSED_PATH.parent / "runs" / partial.scan_run_id)
 
 
-def test_reviewer_enum_mapping_preserves_canonical_filter_and_aggregation_inputs() -> None:
+def test_reviewer_enum_mapping_preserves_canonical_filter_and_aggregation_inputs() -> (
+    None
+):
     findings = findings_to_dataframe(load_processed_data(SAMPLE_PATH))
     canonical = findings.copy(deep=True)
     before_counts = (
@@ -515,9 +610,7 @@ def test_reviewer_enum_mapping_preserves_canonical_filter_and_aggregation_inputs
 @pytest.mark.parametrize(
     "replace_artifact",
     [
-        lambda payload: payload.update(
-            {"scan_run_id": "run-20260827-000000-deadbe"}
-        ),
+        lambda payload: payload.update({"scan_run_id": "run-20260827-000000-deadbe"}),
         lambda payload: payload.update({"target_set_id": "replaced-target"}),
         lambda payload: payload.clear(),
     ],
@@ -530,7 +623,13 @@ def test_discovered_artifact_replacement_cannot_bypass_runstore_snapshot_validat
     store = RunStore(tmp_path)
     monkeypatch.setattr(dashboard_app, "RUN_STORE", store)
     monkeypatch.setattr(dashboard_app, "DATA_ROOT", tmp_path)
-    initial = store.create_run(RunRequest(target_set_id="local-lab-v1", vuln_types=["XSS"]))
+    initial = store.create_run(
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id="local-lab-deployment",
+            vuln_types=["XSS"],
+        )
+    )
     payload = json.loads(SAMPLE_PATH.read_text())
     payload.update(
         {
@@ -610,9 +709,11 @@ def test_mixed_chart_display_mapping_keeps_canonical_aggregations(
     assert _display_rule_verdict("FAILED") == "실패"
     assert set(figures[1].data[0].labels) == {"취약", "미요청", "실패"}
     assert {trace.name for trace in figures[2].data} == {"취약", "미요청", "실패"}
-    assert {
-        value for trace in figures[2].data for value in trace.x
-    } == {"취약 의심", "양호", "실패"}
+    assert {value for trace in figures[2].data for value in trace.x} == {
+        "취약 의심",
+        "양호",
+        "실패",
+    }
 
 
 def test_partial_banner_uses_unfiltered_full_run_counts() -> None:
