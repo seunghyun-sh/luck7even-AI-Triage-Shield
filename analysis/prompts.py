@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-PROMPT_VERSION = "triage-report-v7"
+PROMPT_VERSION = "triage-report-v8"
 _PROVIDER_INPUT_LIMIT_BYTES = 64 * 1024
 
 
@@ -48,8 +48,17 @@ each finding_id exactly and never omit, duplicate, or invent an ID."""
 
 def retrieval_input(vuln_type: str) -> str:
     """Build a controlled family query without scanner-selected search terms."""
+    query = (
+        "Find official guidance for evaluating reflected and stored cross-site "
+        "scripting, including execution context and output encoding."
+        if vuln_type == "XSS"
+        else (
+            "Find official guidance for evaluating SQL injection using database "
+            "errors, boolean response differences, and timing differences."
+        )
+    )
     encoded = json.dumps(
-        {"retrieval_family": vuln_type},
+        {"query": query, "retrieval_family": vuln_type},
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
