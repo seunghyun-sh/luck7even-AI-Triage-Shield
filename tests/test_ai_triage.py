@@ -452,6 +452,8 @@ def test_prompts_have_vulnerability_focus_and_input_excludes_url_secrets(monkeyp
     xss = xss_client.responses.calls[0]
     assert "reflection" in xss["instructions"] and "context" in xss["instructions"]
     assert "?secret=x" not in xss["input"] and "#fragment" not in xss["input"]
+    assert "reflected email" not in xss["input"]
+    assert "independent second-stage review" in xss["input"]
     assert (
         "admin@example.test" not in xss["input"]
         and "eyJabc.def.ghi" not in xss["input"]

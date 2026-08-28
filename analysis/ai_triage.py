@@ -51,6 +51,7 @@ from analysis.models import (
     RuleLabel,
     RunStatus,
     ScanStatus,
+    VulnType,
 )
 from analysis.prompts import (
     PROMPT_VERSION,
@@ -194,8 +195,13 @@ def _evidence(finding: RawFinding) -> dict[str, str]:
         if response.baseline_elapsed_ms is None
         else str(response.baseline_elapsed_ms)
     )
+    first_stage_observation = (
+        "The first-stage XSS rule selected this finding for independent second-stage review."
+        if finding.vuln_type is VulnType.XSS
+        else _redact(finding.scan.rule.reason)
+    )
     values = {
-        "E1": _redact(finding.scan.rule.reason),
+        "E1": first_stage_observation,
         "E2": _redact(response.evidence_summary),
         "E3": f"HTTP {response.http_status}; elapsed_ms={response.elapsed_ms}; baseline_elapsed_ms={baseline}",
         "E4": _redact(
