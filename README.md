@@ -132,9 +132,14 @@ AI triage는 Responses API File Search와 검증된 공식 문서 manifest가 �
 
 ```text
 RawRun 1.0
-  → analysis.ai_triage.triage(raw_run)
+  → analysis.ai_triage.triage(raw_run, on_progress)
   → ProcessedRun 1.1
 ```
+
+AI 후보는 XSS·SQLi family별로 공식 근거를 한 번 검색하고 최대 8건씩 묶어
+동시성 2로 보조 분류합니다. 정상 cold-cache 193건은 기존 386회 요청 대신
+File Search 2회와 structured synthesis 25회로 처리합니다. Dashboard는 실제
+후보 수, 완료 수, 공식 근거 검색과 AI batch 처리 상태를 표시합니다.
 
 AI는 최종 승인자가 아니라 2차 보조 분류기입니다. 실제 검색 결과·citation·manifest가 일치하는 `GROUNDED` 결과에서만 `VULNERABLE`, `SAFE`, `INCONCLUSIVE`와 confidence를 생성하며, 모든 결과는 사람 검토가 필요합니다. 공식 근거가 부족하면 `INSUFFICIENT`·`INCONCLUSIVE`로 기록하고 권고·보고서 문장을 생성하지 않습니다.
 
@@ -279,4 +284,4 @@ streamlit run dashboard/app.py
 
 ## 현재 상태
 
-계약 v1 Pydantic 모델, XSS·SQLi 스캐너, `main.py` 오케스트레이션과 Streamlit 결과 검토·통계·조건부 평가·Excel 초안 기능이 구현되어 있습니다. OpenAI 분석은 `analysis.ai_triage.triage` 계약 경계만 존재하며 실제 구현은 아직 통합되지 않았습니다.
+계약 v1 Pydantic 모델, XSS·SQLi 스캐너, `main.py` 오케스트레이션, 근거 기반 OpenAI 2차 보조 분류와 Streamlit 실행 진행·결과 검토·통계·조건부 평가·Excel 초안 기능이 구현되어 있습니다.

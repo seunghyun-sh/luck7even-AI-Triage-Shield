@@ -219,9 +219,11 @@ data/runs/<scan_run_id>/status.json
   "requested_vuln_types": ["XSS", "SQLI"],
   "status": "RUNNING",
   "stage": "SCANNING_XSS",
+  "failed_stage": null,
   "progress": {
     "completed": 3,
-    "total": 10
+    "total": 10,
+    "detail": null
   },
   "started_at": "2026-08-27T11:15:00+09:00",
   "updated_at": "2026-08-27T11:15:08+09:00",
@@ -243,8 +245,10 @@ data/runs/<scan_run_id>/status.json
 | `requested_vuln_types` | string array | 예 | 요청한 유형만 포함 |
 | `status` | string | 예 | 실행 상태 enum |
 | `stage` | string/null | 예 | terminal 이전 현재 단계 |
+| `failed_stage` | string/null | 예 | `FAILED`일 때 실패 직전 단계, 그 외 null |
 | `progress.completed` | integer | 예 | 0 이상 |
 | `progress.total` | integer | 예 | 0 이상, 확정 전에는 0 허용 |
+| `progress.detail` | string/null | 예 | 내부 고정 진행 설명, 최대 128자 |
 | `started_at` | string | 예 | timezone offset 포함 ISO 8601 |
 | `updated_at` | string | 예 | 마지막 원자적 갱신 시각 |
 | `completed_at` | string/null | 예 | terminal 상태에서 필수 |
@@ -277,7 +281,8 @@ data/runs/<scan_run_id>/status.json
 | `AI_TRIAGE` | OpenAI·데이터 처리 |
 | `PUBLISHING_RESULT` | `main.py` |
 
-terminal 상태에서는 `stage=null`로 기록한다.
+terminal 상태에서는 `stage=null`로 기록한다. `FAILED`는 가능한 경우 실패 직전
+단계를 `failed_stage`에 보존하며 `COMPLETED`·`PARTIAL`에서는 null이다.
 
 ### 10.3 허용 상태 전이
 
@@ -395,12 +400,16 @@ data/processed/<scan_run_id>/results.json
 - 신규 writer는 `ProcessedRun.schema_version == "1.1"`과
   `EVIDENCE_GROUNDED_REPORTING` 역할을 사용한다. Reader는 기존 `1.0`도
   검토할 수 있지만 출처 없는 기존 초안으로 명시한다.
-- `triage(raw_run) -> ProcessedRun`은 파일을 직접 게시하지 않으며 raw
+- `triage(raw_run, on_progress) -> ProcessedRun`은 파일을 직접 게시하지 않으며 raw
   Finding과 scan facts를 1:1 보존한다.
-- 첫 Responses 호출의 completed File Search 결과와 message citation의
-  교집합이 private KB manifest와 일치할 때만 검색 passage를 허용한다.
-  별도 `responses.parse` 호출이 이 제한된 passage에서 구조화 claim을 만들며
-  모델이 반환한 출처 metadata는 사용하지 않는다.
+- cache miss 후보를 XSS·SQLi family로 묶고 family마다 completed File Search를
+  한 번 실행한다. message citation·검색 결과·private KB manifest 교집합에 포함된
+  passage만 최대 8건의 별도 `responses.parse` batch가 공유한다.
+- batch는 최대 동시성 2, finding ID exact-set, finding-scoped evidence ID와
+  JSON encoded input cap을 강제한다. valid batch envelope의 item별 근거 오류는
+  해당 Finding만 실패시키며 envelope 자체가 invalid이면 해당 batch만 실패한다.
+- `on_progress(completed, total, detail)`은 AI 후보 기준 절대 완료 수와 내부 고정
+  detail을 전달한다. provider 원문·payload·오류 메시지는 detail에 포함하지 않는다.
 - `GROUNDED` AI 보조 분류는 `VULNERABLE`, `SAFE`, `INCONCLUSIVE`와
   confidence를 생성할 수 있지만 `needs_human_review=true`를 유지하며 최종
   승인을 의미하지 않는다. `INSUFFICIENT`는 `INCONCLUSIVE`, confidence null이고
