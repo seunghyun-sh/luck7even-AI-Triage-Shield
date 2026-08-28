@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import sys
+from html import escape
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -39,15 +42,33 @@ from orchestration.deployment_registry import (
     resolve_deployment_manifest,
 )
 from orchestration.launcher import RunLaunchError, start_run
+from orchestration.models import ExecutionStage
 from orchestration.preflight import Readiness, run_preflight
 from orchestration.run_store import RunStore
 
 SAMPLE_PROCESSED = PROJECT_ROOT / "configs" / "triaged-results.example.json"
 SAMPLE_GROUND_TRUTH = PROJECT_ROOT / "configs" / "ground-truth.example.json"
-DATA_ROOT = PROJECT_ROOT / "data"
+DATA_ROOT = Path(
+    os.environ.get("AI_TRIAGE_DASHBOARD_DATA_ROOT", str(PROJECT_ROOT / "data"))
+).resolve()
 RUN_STORE = RunStore(DATA_ROOT)
 ACTIVE_STATUSES = {"QUEUED", "RUNNING"}
 TERMINAL_STATUSES = {"COMPLETED", "PARTIAL", "FAILED"}
+STAGE_LABELS = {
+    ExecutionStage.VALIDATING_TARGET: "대상 검증",
+    ExecutionStage.SCANNING_XSS: "XSS 스캔",
+    ExecutionStage.SCANNING_SQLI: "SQLi 스캔",
+    ExecutionStage.PUBLISHING_RAW: "Raw 결과 저장",
+    ExecutionStage.AI_TRIAGE: "AI 2차 분류",
+    ExecutionStage.PUBLISHING_RESULT: "결과 게시",
+}
+AI_PROGRESS_DETAILS = (
+    re.compile(r"AI 후보 (?:계산 중|준비 중|없음)"),
+    re.compile(r"캐시 결과 재사용 · \d+/\d+"),
+    re.compile(r"AI 처리 완료 · \d+/\d+"),
+    re.compile(r"공식 근거 검색 · (?:XSS|SQLI)"),
+    re.compile(r"AI 배치 처리 · \d+/\d+"),
+)
 DISPLAY_LABELS = {
     "run_status": {
         "COMPLETED": "완료",
@@ -90,6 +111,16 @@ TRUSTED_CSS = """
 [data-testid="stMetric"] { background: #0e1b2b; border: 1px solid #1e3a50; border-radius: 10px; padding: .75rem; }
 [data-testid="stDataFrame"] { border: 1px solid #1e3a50; border-radius: 8px; }
 .section-label { color: #7dd3fc; font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.stage-flow { display: flex; gap: .65rem; margin: .75rem 0 1rem; overflow-x: auto; padding-bottom: .2rem; }
+.stage-card { flex: 1 0 10rem; border: 1px solid #334155; border-radius: .6rem; padding: .65rem .75rem; color: #94a3b8; background: #0f172a; }
+.stage-card.completed { border-color: #166534; color: #bbf7d0; }
+.stage-card.current { border-color: #2563eb; color: #dbeafe; background: #172554; }
+.stage-card.failed { border-color: #dc2626; color: #fecaca; background: #450a0a; }
+.stage-card .stage-state { align-items: center; display: flex; font-size: .78rem; font-weight: 700; gap: .35rem; min-height: 1rem; }
+.stage-card .stage-label { font-size: .92rem; font-weight: 650; margin-top: .35rem; }
+.stage-spinner { animation: stage-spin .9s linear infinite; border: 2px solid #93c5fd; border-right-color: transparent; border-radius: 50%; display: inline-block; height: .7rem; width: .7rem; }
+@keyframes stage-spin { to { transform: rotate(360deg); } }
+@media (max-width: 720px) { .stage-flow { flex-direction: column; overflow-x: visible; } .stage-card { flex-basis: auto; } }
 </style>
 """
 
@@ -821,6 +852,74 @@ def _active_run_id() -> str | None:
     return status.scan_run_id if status is not None else None
 
 
+def _stage_rows(status: Any) -> list[dict[str, str | ExecutionStage]]:
+    """Return the requested pipeline stages with their display state."""
+
+    stages = [ExecutionStage.VALIDATING_TARGET]
+    if "XSS" in status.requested_vuln_types:
+        stages.append(ExecutionStage.SCANNING_XSS)
+    if "SQLI" in status.requested_vuln_types:
+        stages.append(ExecutionStage.SCANNING_SQLI)
+    stages.extend(
+        (
+            ExecutionStage.PUBLISHING_RAW,
+            ExecutionStage.AI_TRIAGE,
+            ExecutionStage.PUBLISHING_RESULT,
+        )
+    )
+
+    terminal_complete = status.status.value in {"COMPLETED", "PARTIAL"}
+    current_stage = (
+        status.failed_stage if status.status.value == "FAILED" else status.stage
+    )
+    rows = []
+    for index, stage in enumerate(stages):
+        if terminal_complete:
+            state = "COMPLETED"
+        elif stage == current_stage:
+            state = "FAILED" if status.status.value == "FAILED" else "CURRENT"
+        elif current_stage in stages and index < stages.index(current_stage):
+            state = "COMPLETED"
+        else:
+            state = "PENDING"
+        rows.append({"stage": stage, "label": STAGE_LABELS[stage], "state": state})
+    return rows
+
+
+def _progress_detail(status: Any) -> str | None:
+    """Return only a dashboard-safe description of the current work."""
+
+    detail = status.progress.detail
+    if not detail:
+        return None
+    if status.stage is ExecutionStage.AI_TRIAGE:
+        return (
+            detail
+            if any(pattern.fullmatch(detail) for pattern in AI_PROGRESS_DETAILS)
+            else "AI 2차 분류 진행 중"
+        )
+    return detail
+
+
+def _render_stage_flow(status: Any) -> None:
+    state_content = {
+        "COMPLETED": "&#10003; 완료",
+        "CURRENT": '<span class="stage-spinner"></span>진행 중',
+        "PENDING": "대기",
+        "FAILED": "실패",
+    }
+    cards = "".join(
+        (
+            f'<div class="stage-card {row["state"].lower()}">'
+            f'<div class="stage-state">{state_content[row["state"]]}</div>'
+            f'<div class="stage-label">{escape(str(row["label"]))}</div>'
+            "</div>"
+        )
+        for row in _stage_rows(status)
+    )
+    st.markdown(f'<div class="stage-flow">{cards}</div>', unsafe_allow_html=True)
+
+
 def _render_run_status(scan_run_id: str, *, polling: bool) -> None:
     try:
         status = RUN_STORE.load_status(scan_run_id)
@@ -836,7 +935,7 @@ def _render_run_status(scan_run_id: str, *, polling: bool) -> None:
             _display_enum("vuln_type", value) for value in status.requested_vuln_types
         ),
         "상태": _display_enum("run_status", status.status.value),
-        "단계": status.stage.value if status.stage else "대기 중",
+        "단계": STAGE_LABELS.get(status.stage or status.failed_stage, "대기 중"),
         "진행": (
             f"{status.progress.completed}/{status.progress.total}"
             if status.progress.total
@@ -844,12 +943,24 @@ def _render_run_status(scan_run_id: str, *, polling: bool) -> None:
         ),
         "업데이트": status.updated_at.isoformat(),
     }
+    _render_stage_flow(status)
+    detail = _progress_detail(status)
+    if detail:
+        st.caption(f"현재 작업: {detail}")
     st.json(details, expanded=False)
     if status.progress.total:
+        percentage = status.progress.completed / status.progress.total * 100
         st.progress(
             status.progress.completed / status.progress.total,
-            text=f"진행률: {status.progress.completed}/{status.progress.total}",
+            text=(
+                f"진행률: {status.progress.completed}/{status.progress.total} "
+                f"({percentage:.1f}%)"
+            ),
         )
+    elif status.stage is ExecutionStage.AI_TRIAGE and detail == "AI 후보 없음":
+        st.caption("진행률: AI 후보 없음")
+    elif status.stage is ExecutionStage.AI_TRIAGE and detail:
+        st.caption("진행률: 후보 계산 중")
     else:
         st.caption("진행률: 전체 건수 계산 중")
     if polling and status.status.value in TERMINAL_STATUSES:

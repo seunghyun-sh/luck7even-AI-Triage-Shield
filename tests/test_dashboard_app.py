@@ -24,8 +24,10 @@ from dashboard.app import (
     _priority_table,
     _processed_display_name,
     _render_charts,
+    _render_run_status,
     _report_frame,
     _safe_official_url,
+    _stage_rows,
 )
 from dashboard.data_loader import (
     findings_to_dataframe,
@@ -39,7 +41,13 @@ from dashboard.metrics import (
     build_type_counts,
 )
 from orchestration import deployment_registry
-from orchestration.models import ExecutionStage, ExecutionStatus, RunError, RunRequest
+from orchestration.models import (
+    ExecutionStage,
+    ExecutionStatus,
+    Progress,
+    RunError,
+    RunRequest,
+)
 from orchestration.run_store import RunStore
 
 APP_PATH = Path(__file__).resolve().parents[1] / "dashboard" / "app.py"
@@ -59,6 +67,18 @@ def _isolate_registered_deployments(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_dashboard_data(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    data_root = tmp_path / "data"
+    previous_processed_path = globals()["PROCESSED_PATH"]
+    globals()["PROCESSED_PATH"] = data_root / "processed"
+    monkeypatch.setenv("AI_TRIAGE_DASHBOARD_DATA_ROOT", str(data_root))
+    monkeypatch.setattr(dashboard_app, "DATA_ROOT", data_root)
+    monkeypatch.setattr(dashboard_app, "RUN_STORE", RunStore(data_root))
+    yield
+    globals()["PROCESSED_PATH"] = previous_processed_path
+
+
 def _terminal_run(store: RunStore, initial, status: ExecutionStatus) -> None:
     running_time = initial.updated_at + timedelta(microseconds=1)
     running = initial.model_copy(
@@ -75,6 +95,9 @@ def _terminal_run(store: RunStore, initial, status: ExecutionStatus) -> None:
             update={
                 "status": status,
                 "stage": None,
+                "failed_stage": (
+                    running.stage if status is ExecutionStatus.FAILED else None
+                ),
                 "updated_at": terminal_time,
                 "completed_at": terminal_time,
                 "raw_result_path": f"raw/{initial.scan_run_id}/findings.json",
@@ -114,7 +137,7 @@ def _write_processed_run(store: RunStore, initial, status: ExecutionStatus) -> P
             and finding["ai"]["status"] != "FAILED"
         ]
     path = PROCESSED_PATH / initial.scan_run_id / "results.json"
-    path.parent.mkdir()
+    path.parent.mkdir(parents=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
@@ -122,6 +145,15 @@ def _write_processed_run(store: RunStore, initial, status: ExecutionStatus) -> P
 def _review(app: AppTest) -> AppTest:
     app.session_state["dashboard_view"] = "결과 검토"
     return app.run(timeout=30)
+
+
+def _use_processed_sample(app: AppTest) -> AppTest:
+    source = next(radio for radio in app.radio if radio.label == "Processed 결과")
+    app = source.set_value("샘플 사용").run(timeout=30)
+    ground_truth = next(
+        radio for radio in app.radio if radio.label == "SQLi ground truth"
+    )
+    return ground_truth.set_value("샘플 사용").run(timeout=30)
 
 
 def _button(app: AppTest, label: str):
@@ -134,6 +166,174 @@ def test_preflight_fingerprint_binds_deployment_identity_and_version() -> None:
         "2026.08.28",
         ("SQLI", "XSS"),
     )
+
+
+def test_stage_rows_include_requested_scans_in_pipeline_order(tmp_path: Path) -> None:
+    initial = RunStore(tmp_path).create_run(
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id="local-lab-deployment",
+            vuln_types=["XSS", "SQLI"],
+        )
+    )
+    status = initial.model_copy(
+        update={
+            "status": ExecutionStatus.RUNNING,
+            "stage": ExecutionStage.AI_TRIAGE,
+        }
+    )
+
+    assert [(row["stage"], row["state"]) for row in _stage_rows(status)] == [
+        (ExecutionStage.VALIDATING_TARGET, "COMPLETED"),
+        (ExecutionStage.SCANNING_XSS, "COMPLETED"),
+        (ExecutionStage.SCANNING_SQLI, "COMPLETED"),
+        (ExecutionStage.PUBLISHING_RAW, "COMPLETED"),
+        (ExecutionStage.AI_TRIAGE, "CURRENT"),
+        (ExecutionStage.PUBLISHING_RESULT, "PENDING"),
+    ]
+
+
+def test_stage_rows_exclude_unrequested_sqli_and_complete_terminal_runs(
+    tmp_path: Path,
+) -> None:
+    initial = RunStore(tmp_path).create_run(
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id="local-lab-deployment",
+            vuln_types=["XSS"],
+        )
+    )
+    completed = initial.model_copy(
+        update={"status": ExecutionStatus.COMPLETED, "stage": None}
+    )
+
+    rows = _stage_rows(completed)
+
+    assert [row["stage"] for row in rows] == [
+        ExecutionStage.VALIDATING_TARGET,
+        ExecutionStage.SCANNING_XSS,
+        ExecutionStage.PUBLISHING_RAW,
+        ExecutionStage.AI_TRIAGE,
+        ExecutionStage.PUBLISHING_RESULT,
+    ]
+    assert {row["state"] for row in rows} == {"COMPLETED"}
+
+
+@pytest.mark.parametrize(
+    "terminal_status",
+    (ExecutionStatus.COMPLETED, ExecutionStatus.PARTIAL),
+)
+def test_stage_rows_mark_completed_and_partial_runs_complete(
+    terminal_status: ExecutionStatus,
+    tmp_path: Path,
+) -> None:
+    initial = RunStore(tmp_path).create_run(
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id="local-lab-deployment",
+            vuln_types=["XSS"],
+        )
+    )
+    terminal = initial.model_copy(update={"status": terminal_status, "stage": None})
+
+    assert {row["state"] for row in _stage_rows(terminal)} == {"COMPLETED"}
+
+
+def test_stage_rows_mark_failed_current_stage_red(tmp_path: Path) -> None:
+    initial = RunStore(tmp_path).create_run(
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id="local-lab-deployment",
+            vuln_types=["XSS"],
+        )
+    )
+    failed = initial.model_copy(
+        update={
+            "status": ExecutionStatus.FAILED,
+            "stage": None,
+            "failed_stage": ExecutionStage.AI_TRIAGE,
+            "completed_at": initial.updated_at,
+            "error": RunError(
+                code="AI_FAILED",
+                message="AI triage failed.",
+                retryable=True,
+            ),
+        }
+    )
+    failed = type(initial).model_validate(failed.model_dump(mode="json"))
+
+    assert [(row["stage"], row["state"]) for row in _stage_rows(failed)][-2:] == [
+        (ExecutionStage.AI_TRIAGE, "FAILED"),
+        (ExecutionStage.PUBLISHING_RESULT, "PENDING"),
+    ]
+
+
+def test_run_status_renders_ai_progress_detail_percentage_and_candidate_calculation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = RunStore(tmp_path)
+    initial = store.create_run(
+        RunRequest(
+            target_set_id="local-lab-v1",
+            deployment_id="local-lab-deployment",
+            vuln_types=["XSS"],
+        )
+    )
+    status = initial.model_copy(
+        update={
+            "status": ExecutionStatus.RUNNING,
+            "stage": ExecutionStage.AI_TRIAGE,
+            "progress": Progress(
+                completed=64, total=193, detail="AI 배치 처리 · 64/193"
+            ),
+        }
+    )
+    captions: list[str] = []
+    progress: list[tuple[float, str]] = []
+    markdowns: list[str] = []
+    details: list[dict[str, object]] = []
+    monkeypatch.setattr(dashboard_app.RUN_STORE, "load_status", lambda _: status)
+    monkeypatch.setattr(
+        dashboard_app.st, "markdown", lambda value, **_: markdowns.append(value)
+    )
+    monkeypatch.setattr(dashboard_app.st, "caption", captions.append)
+    monkeypatch.setattr(
+        dashboard_app.st, "json", lambda value, **_: details.append(value)
+    )
+    monkeypatch.setattr(
+        dashboard_app.st,
+        "progress",
+        lambda value, text: progress.append((value, text)),
+    )
+
+    _render_run_status(status.scan_run_id, polling=False)
+
+    assert captions == ["현재 작업: AI 배치 처리 · 64/193"]
+    assert progress == [(64 / 193, "진행률: 64/193 (33.2%)")]
+    assert details[0]["단계"] == "AI 2차 분류"
+    assert "AI 2차 분류" in markdowns[0]
+
+    calculating = status.model_copy(
+        update={"progress": Progress(completed=0, total=0, detail="AI 후보 계산 중")}
+    )
+    monkeypatch.setattr(dashboard_app.RUN_STORE, "load_status", lambda _: calculating)
+    captions.clear()
+    progress.clear()
+
+    _render_run_status(calculating.scan_run_id, polling=False)
+
+    assert captions == ["현재 작업: AI 후보 계산 중", "진행률: 후보 계산 중"]
+    assert not progress
+
+    no_candidates = status.model_copy(
+        update={"progress": Progress(completed=0, total=0, detail="AI 후보 없음")}
+    )
+    monkeypatch.setattr(dashboard_app.RUN_STORE, "load_status", lambda _: no_candidates)
+    captions.clear()
+
+    _render_run_status(no_candidates.scan_run_id, polling=False)
+
+    assert captions == ["현재 작업: AI 후보 없음", "진행률: AI 후보 없음"]
 
 
 def test_first_visit_renders_execution_only_without_review_side_effects() -> None:
@@ -338,7 +538,7 @@ def test_failed_and_unsafe_artifact_runs_do_not_offer_review_handoff() -> None:
 
 def test_dashboard_renders_conditional_sqli_evaluation() -> None:
     app = _review(AppTest.from_file(str(APP_PATH)).run(timeout=30))
-    app.radio[1].set_value("샘플 사용").run(timeout=30)
+    app = _use_processed_sample(app)
 
     assert not app.exception
     evaluation_metrics = {
@@ -440,7 +640,7 @@ def test_filter_scoped_evaluation_allows_empty_sqli_scope_after_full_validation(
 
 def test_dashboard_shows_empty_evaluation_for_xss_only_filter() -> None:
     app = _review(AppTest.from_file(str(APP_PATH)).run(timeout=30))
-    app.radio[1].set_value("샘플 사용").run(timeout=30)
+    app = _use_processed_sample(app)
     vuln_type_filter = next(
         multiselect
         for multiselect in app.multiselect
@@ -510,7 +710,7 @@ def test_dashboard_distinguishes_zero_run_from_filter_reset() -> None:
             "findings": [],
         }
     )
-    results_path.parent.mkdir()
+    results_path.parent.mkdir(parents=True)
     results_path.write_text(json.dumps(zero_run), encoding="utf-8")
     try:
         _terminal_run(store, initial, ExecutionStatus.COMPLETED)
@@ -774,6 +974,7 @@ def test_partial_banner_uses_unfiltered_full_run_counts() -> None:
     findings = findings_to_dataframe(load_processed_data(SAMPLE_PATH))
     summary = build_summary(findings)
     app = _review(AppTest.from_file(str(APP_PATH)).run(timeout=30))
+    app = _use_processed_sample(app)
     warning = next(
         element.value
         for element in app.warning
