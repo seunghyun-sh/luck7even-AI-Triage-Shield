@@ -617,3 +617,16 @@ class GroundTruthSet(ContractModel):
                 "ground-truth case_id values must be unique within a target_set_id"
             )
         return self
+
+# RAG 기반 AI 분석용 스키마
+from typing import Literal, List
+from pydantic import Field
+
+class AIClaim(BaseModel):
+    claim_type: Literal["OBSERVATION", "IMPACT", "RECOMMENDATION", "MANUAL_CHECK"]
+    text: str
+    evidence_keys: List[str] = Field(default_factory=list)
+    retrieved_result_ids: List[str] = Field(default_factory=list)
+
+class AIAnalysisResult(BaseModel):
+    claims: List[AIClaim]
