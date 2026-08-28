@@ -126,7 +126,7 @@ pip install -r requirements.txt
 
 ### 2. 환경 변수 설정
 
-로컬 `.env` 파일에 `OPENAI_API_KEY`와 `OPENAI_MODEL`을 설정합니다. 현재 저장소에는 `.env.example`이 포함되어 있지 않습니다. API 키, 비밀번호, 세션 키, AWS 계정 정보, 고정 IP, 개인정보가 포함된 원본 응답은 커밋하지 않습니다.
+로컬 `.env` 파일에 `OPENAI_API_KEY`와 `AI_TRIAGE_MODEL`을 설정합니다. 현재 저장소에는 `.env.example`이 포함되어 있지 않습니다. API 키, 비밀번호, 세션 키, AWS 계정 정보, 고정 IP, 개인정보가 포함된 원본 응답은 커밋하지 않습니다.
 
 AI triage는 Responses API File Search와 검증된 공식 문서 manifest가 모두 준비되어야 실행됩니다. `configs/knowledge-base.example.json`의 형식을 참고해 실제 Vector Store·File ID가 포함된 `configs/knowledge-base.local.json`을 비공개로 작성합니다. 이 파일은 Git에서 제외되며 OWASP·KISA HTTPS 자료만 허용합니다. 대시보드 사전점검은 API key, model, manifest가 하나라도 없거나 잘못되면 실행을 차단합니다.
 

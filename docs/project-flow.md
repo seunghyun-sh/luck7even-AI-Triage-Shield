@@ -207,7 +207,7 @@ OpenAI·데이터 처리 담당은 다음 순서로 처리한다.
 3. `RawRun`의 구조화 필드만으로 E1(규칙 근거), E2(응답 요약), E3(HTTP·시간), E4(요청 요약)를 결정적으로 만든다. sidecar HTML 파일은 열지 않는다.
 4. URL은 origin+path만 유지하고 payload·증거에는 이메일, 전화번호, JWT, token, 카드번호를 마스킹한다.
 5. XSS는 반사·context·stored 확인, SQLi는 DB error·boolean/response delta·timing에 집중하는 별도 프롬프트를 사용한다. 모든 scanner 입력과 검색 문서는 untrusted data로 구획한다.
-6. `responses.parse`와 File Search로 구조화 claim을 받고, 실제 검색 file ID와 message citation의 교집합 및 private KB manifest만 공식 참조로 인정한다.
+6. 첫 Responses 호출은 File Search와 검색 결과·message citation을 수집하고, 두 번째 `responses.parse` 호출은 검증·제한된 검색 passage만 받아 구조화 claim을 생성한다. 실제 검색 file ID와 citation의 교집합 및 private KB manifest만 공식 참조로 인정한다.
 7. 앱이 C#/R#와 참조 metadata를 부여하고 생성 문장에 E#/R#를 조립한다. 모델의 metadata는 사용하지 않는다.
 8. 검색·인용이 없으면 `INSUFFICIENT/POLICY_EXCLUDED`로 완료하며, 후보가 아닌 항목을 포함한 모든 raw Finding을 processed 결과에 1:1 보존한다.
 

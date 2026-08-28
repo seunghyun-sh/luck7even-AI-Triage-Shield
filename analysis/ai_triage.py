@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -14,6 +15,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from dotenv import load_dotenv
 from openai import (
     APIConnectionError,
     APIStatusError,
@@ -50,16 +52,23 @@ from analysis.models import (
     RunStatus,
     ScanStatus,
 )
-from analysis.prompts import PROMPT_VERSION, triage_input, triage_instructions
+from analysis.prompts import (
+    PROMPT_VERSION,
+    retrieval_instructions,
+    triage_input,
+    triage_instructions,
+)
 
 OUTPUT_SCHEMA_VERSION = "1.1"
 RETRIEVAL_POLICY_VERSION = "retrieval-v1"
-_PROVIDER_TIMEOUT_SECONDS = 10.0
-_RETRY_BUDGET_SECONDS = 20.0
+_PROVIDER_TIMEOUT_SECONDS = 30.0
+_RETRY_BUDGET_SECONDS = 70.0
 _CACHE_TIMEOUT_SECONDS = 5
-_LEASE_SECONDS = 30
+_LEASE_SECONDS = 90
 _TRUNCATION_MARKER = "[TRUNCATED]"
 _FIELD_BYTE_CAPS = {"E1": 2048, "E2": 2048, "E3": 512, "E4": 2048}
+_RETRIEVED_TEXT_FILE_BYTE_CAP = 768
+_RETRIEVED_TEXT_TOTAL_BYTE_CAP = 1024
 _REDACTIONS = (
     (re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"), "[EMAIL_REDACTED]"),
     (
@@ -121,6 +130,21 @@ class ProviderDeadlineError(TimeoutError):
     """The application-owned provider retry budget was exhausted."""
 
 
+def _load_environment() -> None:
+    load_dotenv(
+        dotenv_path=Path(__file__).resolve().parents[1] / ".env",
+        override=False,
+    )
+
+
+def _configured_model() -> str:
+    _load_environment()
+    model = os.environ.get("AI_TRIAGE_MODEL")
+    if model is None or not model.strip():
+        raise ProviderToolError
+    return model
+
+
 def _truncate_utf8(value: str, cap: int) -> str:
     raw = value.encode("utf-8")
     if len(raw) <= cap:
@@ -176,7 +200,8 @@ def _evidence(finding: RawFinding) -> dict[str, str]:
 
 
 def check_readiness() -> None:
-    if not os.environ.get("OPENAI_API_KEY") or not os.environ.get("OPENAI_MODEL"):
+    _load_environment()
+    if not os.environ.get("OPENAI_API_KEY") or not os.environ.get("AI_TRIAGE_MODEL"):
         raise RuntimeError("AI triage configuration is unavailable.")
     try:
         load_knowledge_base()
@@ -441,8 +466,8 @@ def _get(value: Any, name: str, default: Any = None) -> Any:
     )
 
 
-def _extract_ids(response: Any) -> tuple[set[str], set[str]]:
-    retrieved, cited = set(), set()
+def _extract_retrieval(response: Any) -> tuple[list[dict[str, object]], set[str]]:
+    retrieved, cited = [], set()
     outputs = _get(response, "output", []) or []
     calls = [item for item in outputs if _get(item, "type") == "file_search_call"]
     if (
@@ -453,8 +478,23 @@ def _extract_ids(response: Any) -> tuple[set[str], set[str]]:
         raise ProviderToolError
     for result in _get(calls[0], "results", []) or []:
         file_id = _get(result, "file_id")
-        if file_id:
-            retrieved.add(file_id)
+        text, filename, score = (
+            _get(result, "text"),
+            _get(result, "filename"),
+            _get(result, "score"),
+        )
+        if (
+            not isinstance(file_id, str)
+            or not file_id
+            or not isinstance(text, str)
+            or not text
+            or not isinstance(filename, str)
+            or not filename
+            or not isinstance(score, (int, float))
+            or isinstance(score, bool)
+            or not math.isfinite(score)
+        ):
+            raise ProviderToolError
 
     def annotations(items: Any) -> None:
         for annotation in items or []:
@@ -466,9 +506,54 @@ def _extract_ids(response: Any) -> tuple[set[str], set[str]]:
     for output in outputs:
         if _get(output, "type") == "message":
             for content in _get(output, "content", []) or []:
-                annotations(_get(content, "annotations", []))
-    annotations(_get(_get(response, "output_text"), "annotations", []))
+                if _get(content, "type") == "output_text":
+                    annotations(_get(content, "annotations", []))
+    results = _get(calls[0], "results", []) or []
+    if not results:
+        return [], cited
+    if not cited:
+        raise ProviderToolError
+    remaining = _RETRIEVED_TEXT_TOTAL_BYTE_CAP
+    for result in results:
+        if remaining <= 0:
+            break
+        if _get(result, "file_id") not in cited:
+            continue
+        text = _truncate_utf8(
+            _get(result, "text"), min(_RETRIEVED_TEXT_FILE_BYTE_CAP, remaining)
+        )
+        encoded = len(text.encode("utf-8"))
+        if not text:
+            continue
+        retrieved.append(
+            {
+                "file_id": _get(result, "file_id"),
+                "filename": _get(result, "filename"),
+                "score": _get(result, "score"),
+                "text": text,
+            }
+        )
+        remaining -= encoded
+    if not retrieved:
+        raise ProviderToolError
     return retrieved, cited
+
+
+def _synthesis_input(
+    vuln_type: str, evidence: dict[str, str], contexts: list[dict[str, object]]
+) -> tuple[str, list[dict[str, object]]]:
+    selected: list[dict[str, object]] = []
+    encoded = ""
+    for context in contexts:
+        try:
+            candidate = triage_input(vuln_type, evidence, [*selected, context])
+        except ValueError:
+            continue
+        selected.append(context)
+        encoded = candidate
+    if not selected:
+        raise ProviderToolError
+    return encoded, selected
 
 
 def _status_retryable(error: APIStatusError) -> bool:
@@ -496,17 +581,16 @@ def _provider(
     jitter: Any = lambda: 0.0,
     retry_budget: float = _RETRY_BUDGET_SECONDS,
 ) -> tuple[ProviderAnalysis, set[str], set[str]]:
-    model, deadline = os.environ["OPENAI_MODEL"], monotonic() + retry_budget
+    model, deadline = _configured_model(), monotonic() + retry_budget
     for attempt in range(3):
         try:
             remaining = deadline - monotonic()
             if remaining <= 0:
                 raise ProviderDeadlineError
-            response = client.responses.parse(
+            retrieval = client.responses.create(
                 model=model,
-                instructions=triage_instructions(finding.vuln_type.value),
+                instructions=retrieval_instructions(finding.vuln_type.value),
                 input=triage_input(finding.vuln_type.value, evidence),
-                text_format=ProviderAnalysis,
                 tools=[
                     {
                         "type": "file_search",
@@ -514,19 +598,47 @@ def _provider(
                         "max_num_results": 5,
                     }
                 ],
-                tool_choice={"type": "file_search"},
+                tool_choice="required",
                 include=["file_search_call.results"],
                 max_output_tokens=1200,
                 max_tool_calls=1,
                 timeout=min(_PROVIDER_TIMEOUT_SECONDS, remaining),
             )
+            contexts, cited = _extract_retrieval(retrieval)
+            if not contexts:
+                return ProviderAnalysis(), set(), cited
+            sources = source_map_by_file_id(manifest)
+            context_file_ids = {item["file_id"] for item in contexts}
+            if cited - context_file_ids or any(
+                file_id not in sources
+                or finding.vuln_type.value not in sources[file_id].vuln_types
+                for file_id in context_file_ids
+            ):
+                raise ReferenceMismatchError
+            synthesis_input, contexts = _synthesis_input(
+                finding.vuln_type.value, evidence, contexts
+            )
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise ProviderDeadlineError
+            response = client.responses.parse(
+                model=model,
+                instructions=triage_instructions(finding.vuln_type.value),
+                input=synthesis_input,
+                text_format=ProviderAnalysis,
+                max_output_tokens=1200,
+                timeout=min(_PROVIDER_TIMEOUT_SECONDS, remaining),
+            )
+            if _get(response, "status") != "completed":
+                raise ProviderToolError
             parsed = _get(response, "output_parsed")
             if not isinstance(parsed, ProviderAnalysis):
                 parsed = ProviderAnalysis.model_validate(parsed)
-            retrieved, cited = _extract_ids(response)
-            return parsed, retrieved, cited
+            return parsed, {item["file_id"] for item in contexts}, cited
         except ValidationError:
             raise ProviderSchemaError from None
+        except ReferenceMismatchError:
+            raise
         except (
             APITimeoutError,
             RateLimitError,
@@ -568,22 +680,22 @@ def _grounded(
     manifest: KnowledgeBaseManifest,
     now: Any,
 ) -> AiResult:
-    if not parsed.claims:
-        return _insufficient(model, manifest, sorted(retrieved), now)
     trusted = retrieved & cited
     claimed = {fid for claim in parsed.claims for fid in claim.reference_file_ids}
-    if claimed - trusted:
-        raise ReferenceMismatchError
-    if not retrieved:
-        return _insufficient(model, manifest, [], now)
-    if not trusted:
-        return _insufficient(model, manifest, sorted(retrieved), now)
     sources = source_map_by_file_id(manifest)
     if any(
         fid not in sources or vuln_type not in sources[fid].vuln_types
-        for fid in trusted | retrieved
+        for fid in retrieved
     ):
         raise ReferenceMismatchError
+    if not retrieved:
+        return _insufficient(model, manifest, [], now)
+    if not parsed.claims:
+        return _insufficient(model, manifest, sorted(retrieved), now)
+    if claimed - trusted:
+        raise ReferenceMismatchError
+    if not trusted:
+        return _insufficient(model, manifest, sorted(retrieved), now)
     if any(
         set(claim.evidence_ids) - set(evidence) for claim in parsed.claims
     ) or not set(AiClaimType).issubset({claim.claim_type for claim in parsed.claims}):
@@ -746,10 +858,11 @@ def triage(
             ai = _not_requested(AiStatusReason.RULE_NOT_SUSPECTED)
         else:
             try:
+                _load_environment()
                 if manifest is None:
                     check_readiness()
                     manifest = load_knowledge_base()
-                model, evidence = os.environ["OPENAI_MODEL"], _evidence(finding)
+                model, evidence = _configured_model(), _evidence(finding)
                 key, bindings = (
                     _cache_key(finding, evidence, model, manifest),
                     _cache_bindings(evidence, model, manifest, finding.vuln_type.value),

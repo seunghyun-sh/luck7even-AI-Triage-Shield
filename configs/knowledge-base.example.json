@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "knowledge_base_version": "owasp-top-10-2021",
+  "knowledge_base_version": "official-security-guides-example",
   "vector_store_ids": [
     "VECTOR_STORE_ID_REPLACE_WITH_PRIVATE_VALUE"
   ],
@@ -19,6 +19,21 @@
         "SQLI"
       ],
       "language": "en"
+    },
+    {
+      "file_id": "KISA_FILE_ID_REPLACE_WITH_PRIVATE_VALUE",
+      "source_id": "kisa-secure-coding-guide-2021",
+      "publisher": "KISA",
+      "title": "소프트웨어 개발보안 가이드",
+      "version": "2021.12.29",
+      "section": "입력 데이터 검증 및 표현",
+      "canonical_url": "https://www.kisa.or.kr/2060204",
+      "document_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "vuln_types": [
+        "XSS",
+        "SQLI"
+      ],
+      "language": "ko"
     }
   ]
 }

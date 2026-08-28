@@ -106,21 +106,43 @@ def kb(version="kb1", vuln_types=("XSS",)):
 
 
 class FakeResponses:
-    def __init__(self, outcomes):
+    def __init__(self, outcomes, parse_outcomes=None):
         self.outcomes = list(outcomes) if isinstance(outcomes, list) else [outcomes]
+        self.parse_outcomes = (
+            list(parse_outcomes)
+            if isinstance(parse_outcomes, list)
+            else ([parse_outcomes] if parse_outcomes is not None else None)
+        )
         self.calls = []
+        self.create_calls = []
+        self.parse_calls = []
+        self.last_created = None
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        self.create_calls.append(kwargs)
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        self.last_created = outcome
+        return outcome
 
     def parse(self, **kwargs):
         self.calls.append(kwargs)
-        outcome = self.outcomes.pop(0)
+        self.parse_calls.append(kwargs)
+        outcome = (
+            self.parse_outcomes.pop(0)
+            if self.parse_outcomes is not None
+            else self.last_created
+        )
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
 
 
 class FakeClient:
-    def __init__(self, outcomes):
-        self.responses = FakeResponses(outcomes)
+    def __init__(self, outcomes, parse_outcomes=None):
+        self.responses = FakeResponses(outcomes, parse_outcomes)
 
 
 def provider_response(claims, retrieved=("file_1",), cited=("file_1",)):
@@ -131,16 +153,25 @@ def provider_response(claims, retrieved=("file_1",), cited=("file_1",)):
             SimpleNamespace(
                 type="file_search_call",
                 status="completed",
-                results=[SimpleNamespace(file_id=x) for x in retrieved],
+                results=[
+                    SimpleNamespace(
+                        file_id=x,
+                        text=f"Official guidance for {x}",
+                        filename=f"{x}.md",
+                        score=0.9,
+                    )
+                    for x in retrieved
+                ],
             ),
             SimpleNamespace(
                 type="message",
                 content=[
                     SimpleNamespace(
+                        type="output_text",
                         annotations=[
                             SimpleNamespace(file_citation=SimpleNamespace(file_id=x))
                             for x in cited
-                        ]
+                        ],
                     )
                 ],
             ),
@@ -163,7 +194,7 @@ def valid_claims(*, evidence_id="E1", reference_id="file_1"):
 
 
 def candidate(monkeypatch, client, run=None, manifest=None, **kwargs):
-    monkeypatch.setenv("OPENAI_MODEL", "test-model")
+    monkeypatch.setenv("AI_TRIAGE_MODEL", "test-model")
     cache = kwargs.pop("cache", {})
     return triage(
         run or raw_run(raw_finding()),
@@ -207,7 +238,7 @@ def test_mixed_scan_result_is_partial_and_failed_scan_is_not_requested(monkeypat
         "NOT_REQUESTED",
         "SCAN_FAILED",
     )
-    assert len(client.responses.calls) == 1
+    assert len(client.responses.create_calls) == len(client.responses.parse_calls) == 1
 
 
 def test_empty_and_all_failed_runs_are_failed_and_processed_11_requires_role():
@@ -220,13 +251,13 @@ def test_empty_and_all_failed_runs_are_failed_and_processed_11_requires_role():
         ProcessedRun.model_validate(invalid)
 
 
-def test_claimed_citation_without_retrieved_intersection_is_reference_mismatch(
+def test_completed_empty_retrieval_is_insufficient_even_with_a_citation(
     monkeypatch,
 ):
     result = candidate(
         monkeypatch, FakeClient(provider_response(valid_claims(), (), ("file_1",)))
     )
-    assert result.findings[0].ai.error.code == "AI_REFERENCE_MISMATCH"
+    assert result.findings[0].ai.grounding_status.value == "INSUFFICIENT"
 
 
 def test_retrieved_and_cited_file_outside_manifest_is_reference_mismatch(monkeypatch):
@@ -273,6 +304,19 @@ def test_timeout_retries_three_times_without_exposing_raw_message(monkeypatch):
     assert sleeps == [1, 2]
     assert (ai.error.code, ai.error.retryable) == ("AI_TIMEOUT", True)
     assert "Request timed out." not in ai.error.message
+
+
+def test_synthesis_transient_retries_the_entire_two_step_flow(monkeypatch):
+    retrieval = [provider_response(valid_claims()) for _ in range(2)]
+    client = FakeClient(
+        retrieval,
+        [provider_error(APITimeoutError), provider_response(valid_claims())],
+    )
+    sleeps = []
+    result = candidate(monkeypatch, client, sleeper=sleeps.append)
+    assert result.findings[0].ai.grounding_status.value == "GROUNDED"
+    assert len(client.responses.create_calls) == len(client.responses.parse_calls) == 2
+    assert sleeps == [1]
 
 
 def test_retry_after_is_capped_and_deadline_prevents_a_retry(monkeypatch):
@@ -364,11 +408,14 @@ def test_cache_hit_skips_provider_and_invalid_cached_results_are_not_success(
     monkeypatch,
 ):
     cache = {}
-    monkeypatch.setenv("OPENAI_MODEL", "test-model")
+    monkeypatch.setenv("AI_TRIAGE_MODEL", "test-model")
     first = FakeClient(provider_response(valid_claims()))
     run = raw_run(raw_finding())
     triage(run, client=first, knowledge_base=kb(), cache=cache, now=lambda: NOW)
-    assert len(first.responses.calls) == 1 and len(cache) == 1
+    assert (
+        len(first.responses.create_calls) == len(first.responses.parse_calls) == 1
+        and len(cache) == 1
+    )
     hit = FakeClient(AssertionError("provider must not be called"))
     assert (
         triage(run, client=hit, knowledge_base=kb(), cache=cache, now=lambda: NOW)
@@ -390,7 +437,11 @@ def test_cache_hit_skips_provider_and_invalid_cached_results_are_not_success(
             run, client=replacement, knowledge_base=kb(), cache=cache, now=lambda: NOW
         )
         assert result.findings[0].ai.status.value == "COMPLETED"
-        assert len(replacement.responses.calls) == 1
+        assert (
+            len(replacement.responses.create_calls)
+            == len(replacement.responses.parse_calls)
+            == 1
+        )
         cache[key] = cached
     poisoned = {
         **cached,
@@ -411,11 +462,15 @@ def test_cache_hit_skips_provider_and_invalid_cached_results_are_not_success(
         run, client=replacement, knowledge_base=kb(), cache=cache, now=lambda: NOW
     )
     assert result.findings[0].ai.status.value == "COMPLETED"
-    assert len(replacement.responses.calls) == 1
+    assert (
+        len(replacement.responses.create_calls)
+        == len(replacement.responses.parse_calls)
+        == 1
+    )
 
 
 def test_cache_key_changes_and_failures_are_not_cached(monkeypatch):
-    monkeypatch.setenv("OPENAI_MODEL", "model-a")
+    monkeypatch.setenv("AI_TRIAGE_MODEL", "model-a")
     cache, client = (
         {},
         FakeClient([provider_response(valid_claims()) for _ in range(5)]),
@@ -432,7 +487,7 @@ def test_cache_key_changes_and_failures_are_not_cached(monkeypatch):
             raw_run(raw_finding(case_id="changed-case", finding_id="changed-finding")),
         ),
     ]:
-        monkeypatch.setenv("OPENAI_MODEL", model)
+        monkeypatch.setenv("AI_TRIAGE_MODEL", model)
         triage(
             subject,
             client=client,
@@ -440,7 +495,10 @@ def test_cache_key_changes_and_failures_are_not_cached(monkeypatch):
             cache=cache,
             now=lambda: NOW,
         )
-    assert len(client.responses.calls) == 5 and len(cache) == 5
+    assert (
+        len(client.responses.create_calls) == len(client.responses.parse_calls) == 5
+        and len(cache) == 5
+    )
     failed_cache = {}
     result = triage(
         run, client=FakeClient(ValueError("x")), knowledge_base=kb(), cache=failed_cache
@@ -448,15 +506,14 @@ def test_cache_key_changes_and_failures_are_not_cached(monkeypatch):
     assert result.findings[0].ai.status.value == "FAILED" and not failed_cache
 
 
-def test_responses_file_search_contract_is_exact(monkeypatch):
+def test_responses_file_search_contract_is_split(monkeypatch):
     client = FakeClient(provider_response(valid_claims()))
     candidate(monkeypatch, client)
-    params = client.responses.calls[0]
+    params = client.responses.create_calls[0]
     assert set(params) == {
         "model",
         "instructions",
         "input",
-        "text_format",
         "tools",
         "include",
         "max_output_tokens",
@@ -465,18 +522,24 @@ def test_responses_file_search_contract_is_exact(monkeypatch):
         "timeout",
     }
     assert params["model"] == "test-model"
-    assert params["text_format"] is ProviderAnalysis
     assert params["tools"] == [
         {"type": "file_search", "vector_store_ids": ["vs_1"], "max_num_results": 5}
     ]
     assert params["include"] == ["file_search_call.results"]
     assert params["max_output_tokens"] == 1200 and params["max_tool_calls"] == 1
-    assert params["tool_choice"] == {"type": "file_search"}
-    assert params["timeout"] == 10.0
+    assert params["tool_choice"] == "required"
+    assert params["timeout"] == 30.0
+    synthesis = client.responses.parse_calls[0]
+    assert synthesis["text_format"] is ProviderAnalysis
+    assert "tools" not in synthesis and "include" not in synthesis
+    assert len(synthesis["input"].encode("utf-8")) <= 8 * 1024
+    assert '"file_id":"file_1"' in synthesis["input"]
+    assert '"text":"Official guidance for file_1"' in synthesis["input"]
+    assert '"evidence"' in synthesis["input"]
 
 
 def test_naive_now_is_schema_invalid(monkeypatch):
-    monkeypatch.setenv("OPENAI_MODEL", "test-model")
+    monkeypatch.setenv("AI_TRIAGE_MODEL", "test-model")
     result = triage(
         raw_run(raw_finding()),
         client=FakeClient(provider_response(valid_claims())),
@@ -489,7 +552,7 @@ def test_naive_now_is_schema_invalid(monkeypatch):
 
 def test_no_candidate_path_needs_no_provider_or_configuration(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    monkeypatch.delenv("AI_TRIAGE_MODEL", raising=False)
     client = FakeClient(AssertionError("provider must not be called"))
     result = triage(
         raw_run(
@@ -563,6 +626,51 @@ def test_direct_sdk_annotation_shape_is_a_citation(monkeypatch):
     assert result.grounding_status.value == "GROUNDED"
 
 
+def test_nonempty_retrieval_without_output_text_citation_fails(monkeypatch):
+    response = provider_response(valid_claims())
+    response.output[1].content[0].annotations = []
+    result = candidate(monkeypatch, FakeClient(response)).findings[0].ai
+    assert result.error.code == "AI_TOOL_FAILED"
+
+
+def test_synthesis_cannot_hallucinate_retrieved_file_id(monkeypatch):
+    response = provider_response(valid_claims(reference_id="file_fake"))
+    result = candidate(monkeypatch, FakeClient(response)).findings[0].ai
+    assert result.error.code == "AI_REFERENCE_MISMATCH"
+
+
+def test_uncited_retrieval_passage_never_reaches_synthesis(monkeypatch):
+    response = provider_response(
+        valid_claims(),
+        retrieved=("file_1", "file_uncited"),
+        cited=("file_1",),
+    )
+    client = FakeClient(response)
+
+    result = candidate(monkeypatch, client)
+
+    assert result.findings[0].ai.grounding_status.value == "GROUNDED"
+    synthesis_input = client.responses.parse_calls[0]["input"]
+    assert "file_1" in synthesis_input
+    assert "file_uncited" not in synthesis_input
+
+
+def test_missing_model_with_injected_dependencies_is_isolated(monkeypatch):
+    monkeypatch.delenv("AI_TRIAGE_MODEL", raising=False)
+    monkeypatch.setattr("analysis.ai_triage._load_environment", lambda: None)
+    client = FakeClient(provider_response(valid_claims()))
+
+    result = triage(
+        raw_run(raw_finding()),
+        client=client,
+        knowledge_base=kb(),
+        cache={},
+    )
+
+    assert result.findings[0].ai.error.code == "AI_TOOL_FAILED"
+    assert not client.responses.calls
+
+
 def test_manifest_digest_invalidates_same_version_cache(monkeypatch):
     cache = {}
     first = FakeClient(provider_response(valid_claims()))
@@ -576,7 +684,7 @@ def test_manifest_digest_invalidates_same_version_cache(monkeypatch):
     )
     second = FakeClient(provider_response(valid_claims()))
     candidate(monkeypatch, second, cache=cache, manifest=changed)
-    assert len(first.responses.calls) == len(second.responses.calls) == 1
+    assert len(first.responses.create_calls) == len(second.responses.create_calls) == 1
 
 
 def test_cache_write_error_cannot_fail_valid_provider_result(monkeypatch):
@@ -595,4 +703,4 @@ def test_sqlite_same_key_lease_and_stale_recovery(tmp_path, monkeypatch):
     cache = SQLiteCache("data/cache/cache.sqlite3")
     assert cache.acquire("key", "first", now=100)
     assert not cache.acquire("key", "second", now=101)
-    assert cache.acquire("key", "second", now=131)
+    assert cache.acquire("key", "second", now=191)
