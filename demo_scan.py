@@ -25,9 +25,15 @@ scenarios = [
         requires_pre_auth=False, auth_profile=None,
         payload_profile="sqli-default", manual_verification_profile="sqli-response-difference",
     )),
-    ("③④ NovaStream 에러 노출 + OR 1=1 데이터 전체 유출", "http://127.0.0.1:5000", TargetCase(
+        ("③④ NovaStream 에러 노출 + OR 1=1 데이터 전체 유출", "http://127.0.0.1:5000", TargetCase(
         case_id="demo-catalog", vuln_type="SQLI", path="/catalog", method="GET",
         input=TargetInput(location="query", parameters={"q": "SF"}, attack_parameter="q"),
+        requires_pre_auth=False, auth_profile=None,
+        payload_profile="sqli-waf-bypass", manual_verification_profile="sqli-response-difference",
+    )),
+        ("⑤ Lumi Market /products/stock (신규 Boolean-based)", "http://127.0.0.1:5001", TargetCase(
+        case_id="demo-stock", vuln_type="SQLI", path="/products/stock", method="GET",
+        input=TargetInput(location="query", parameters={"product_id": "1"}, attack_parameter="product_id"),
         requires_pre_auth=False, auth_profile=None,
         payload_profile="sqli-default", manual_verification_profile="sqli-response-difference",
     )),

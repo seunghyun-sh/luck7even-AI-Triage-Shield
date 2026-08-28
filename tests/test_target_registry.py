@@ -36,7 +36,11 @@ def _write_registry(tmp_path: Path, *, base_url: str, manifest: str) -> Path:
 def test_default_registry_resolves_authorized_manifest() -> None:
     targets = list_registered_targets()
 
-    assert [target.target_set_id for target in targets] == ["local-lab-v1"]
+    assert [target.target_set_id for target in targets] == [
+    "local-lab-v1",
+    "lumi-market-1-sqli",
+    "novastream-2-sqli",
+]
     assert load_registered_target("local-lab-v1") == targets[0].manifest
 
 
