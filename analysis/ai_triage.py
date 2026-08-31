@@ -854,7 +854,7 @@ def triage(
             model = _configured_model()
             for vuln_type in {finding.vuln_type.value for finding in candidates}:
                 try:
-                    on_progress(completed, total, f"검증 근거 준비 · {vuln_type}")
+                    on_progress(completed, total, f"판단 기준 문서 준비 · {vuln_type}")
                     bundles[vuln_type] = resolve_grounding(vuln_type, manifest)
                 except GroundingUnavailableError:
                     for finding in candidates:

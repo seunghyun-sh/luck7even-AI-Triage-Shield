@@ -146,7 +146,7 @@ SHA-256 검증 로컬 공식문서 검색으로 보강합니다. 최대 16건씩
 13회로 처리합니다. AI는 label·confidence·관찰·guidance ID를 반환하고 C2 영향,
 C3 권고, C4 수동 검증 문장은 reviewed template에서 결정적으로 조립합니다.
 
-AI는 최종 승인자가 아니라 2차 보조 분류기입니다. 실제 검색 결과·citation·manifest가 일치하는 `GROUNDED` 결과에서만 `VULNERABLE`, `SAFE`, `INCONCLUSIVE`와 confidence를 생성하며, 모든 결과는 사람 검토가 필요합니다. 공식 근거가 부족하면 `INSUFFICIENT`·`INCONCLUSIVE`로 기록하고 권고·보고서 문장을 생성하지 않습니다.
+AI는 최종 승인자가 아니라 2차 보조 분류기입니다. 실제 검색 결과·citation·manifest가 일치하는 `GROUNDED` 결과에서만 `VULNERABLE`, `SAFE`, `INCONCLUSIVE`와 confidence를 생성하며, 모든 결과는 사람 검토가 필요합니다. OWASP·KISA 문서는 판단 기준과 완화 지침이며 대상 시스템에서 취약점이 실행됐다는 증거가 아닙니다. 공식 판단 기준 문서가 부족하면 `INSUFFICIENT`·`INCONCLUSIVE`로 기록하고 권고·보고서 문장을 생성하지 않습니다.
 
 ### 3. 실습 웹앱 실행
 

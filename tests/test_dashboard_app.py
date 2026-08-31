@@ -723,7 +723,7 @@ def test_dashboard_distinguishes_zero_run_from_filter_reset() -> None:
             ("AI 보조 취약", "0"),
             ("AI 보조 안전", "0"),
             ("AI 판정 불가", "0"),
-            ("공식근거 확보", "0"),
+            ("판단기준 문서 확보", "0"),
             ("AI 처리 실패", "0"),
             ("수동 검토 필요", "0"),
             ("규칙 취약 의심", "0"),

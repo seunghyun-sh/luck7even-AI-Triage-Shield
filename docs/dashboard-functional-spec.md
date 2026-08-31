@@ -52,7 +52,7 @@ AI 판정과 Excel은 최종 보안 판정이나 프로젝트 결과보고서가
 - ACTIVE (`QUEUED`, `RUNNING`)에서는 setup control을 숨기고 RunStore에서 재발견한
   run ID, target set, deployment ID, 요청 유형, 상태, stage, progress, updated_at을
   읽기 전용으로 표시한다. 적용 단계의 완료·현재·대기 상태를 시각화하고 AI 단계는
-  공식 근거 검색, cache 재사용, batch 완료 수를 표시한다. total이 0이면
+  판단 기준 문서 준비, cache 재사용, batch 완료 수를 표시한다. total이 0이면
   `후보 계산 중`과 `AI 후보 없음`을 progress detail로 구분한다.
 - TERMINAL은 `COMPLETED`(완료, green), `PARTIAL`(부분 완료, amber), `FAILED`(실패, red)의 의미를 텍스트로 표시한다. 안전한 canonical processed artifact가 있는 COMPLETED에는 `이 결과 검토`, PARTIAL에는 `부분 결과 검토` CTA만 제공한다. CTA는 `scan_run_id`를 persistent review selection state에 저장하고 결과 검토 view로 이동한다.
 - FAILED 또는 artifact unavailable에는 결과 검토 CTA가 없다. `새 진단 준비`는 session의 run selection만 정리하고 RunStore artifact는 삭제하지 않는다. 자동 결과 이동은 하지 않는다.

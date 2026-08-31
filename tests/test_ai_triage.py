@@ -294,7 +294,10 @@ def test_compact_batches_are_sixteen_and_inputs_are_bounded(monkeypatch):
 
 
 def test_prompt_semantics_are_explicit_and_input_is_bounded():
-    assert "Custom tags" in triage_instructions("XSS")
+    xss_instructions = triage_instructions("XSS")
+    assert "Custom tags" in xss_instructions
+    assert "it is never target-specific" in xss_instructions
+    assert "Only local evidence can support the observation and label" in xss_instructions
     assert "benign apostrophe" in triage_instructions("SQLI")
     payload = batch_triage_input(
         "XSS",
@@ -472,7 +475,7 @@ def test_cache_binding_invalidation(monkeypatch, change):
     if change == "model":
         candidate(monkeypatch, raw, responses, cache=cache, model="other-model")
     elif change == "prompt":
-        monkeypatch.setattr("analysis.ai_triage.PROMPT_VERSION", "triage-report-v10")
+        monkeypatch.setattr("analysis.ai_triage.PROMPT_VERSION", "triage-report-v11")
         candidate(monkeypatch, raw, responses, cache=cache)
     elif change == "manifest":
         changed = manifest().model_copy(update={"knowledge_base_version": "kb2"})

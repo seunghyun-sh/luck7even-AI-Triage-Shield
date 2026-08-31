@@ -359,9 +359,9 @@ def build_excel_report(
         ("AI 보조 취약", dashboard_summary["ai_vulnerable"]),
         ("AI 보조 안전", dashboard_summary["ai_safe"]),
         ("AI 판정 불가", dashboard_summary["ai_inconclusive"]),
-        ("공식근거 확보", len(verified_reference_finding_ids)),
-        ("공식근거 부족", dashboard_summary["ai_insufficient"]),
-        ("공식근거 검증 실패", invalid_grounded_count),
+        ("판단기준 문서 확보", len(verified_reference_finding_ids)),
+        ("판단기준 문서 부족", dashboard_summary["ai_insufficient"]),
+        ("판단기준 문서 검증 실패", invalid_grounded_count),
         ("AI 처리 실패", dashboard_summary["ai_failed"]),
         ("수동 검토 필요", dashboard_summary["needs_human_review"]),
         ("규칙 취약 의심", dashboard_summary["rule_suspected"]),
@@ -407,12 +407,12 @@ def build_excel_report(
     comparison = workbook.create_sheet("판정비교")
     _write_table(comparison, _COMPARISON_COLUMNS, comparison_rows, "판정 비교")
 
-    official_references = workbook.create_sheet("공식근거")
+    official_references = workbook.create_sheet("판단기준문서")
     _write_table(
         official_references,
         _OFFICIAL_REFERENCE_COLUMNS,
         official_reference_rows,
-        "공식 근거",
+        "공식 판단 기준 문서",
     )
 
     buffer = BytesIO()

@@ -66,7 +66,7 @@ AI_PROGRESS_DETAILS = (
     re.compile(r"AI 후보 (?:계산 중|준비 중|없음)"),
     re.compile(r"캐시 결과 재사용 · \d+/\d+"),
     re.compile(r"AI 처리 완료 · \d+/\d+"),
-    re.compile(r"공식 근거 검색 · (?:XSS|SQLI)"),
+    re.compile(r"판단 기준 문서 준비 · (?:XSS|SQLI)"),
     re.compile(r"AI 배치 처리 · \d+/\d+"),
 )
 DISPLAY_LABELS = {
@@ -515,7 +515,7 @@ def _render_detail(df: pd.DataFrame) -> None:
             f"Confidence: **{_text(finding['confidence'])}**"
         )
         grounding_status = _text(finding.get("grounding_status"))
-        st.markdown(f":blue-badge[근거 상태: {grounding_status}]")
+        st.markdown(f":blue-badge[판단 기준 상태: {grounding_status}]")
         if pd.notna(finding["ai_status_reason"]):
             st.info(
                 "미요청 사유: "
@@ -530,7 +530,7 @@ def _render_detail(df: pd.DataFrame) -> None:
             st.caption(label)
             st.code(_text(finding[column]), language="text")
         if finding.get("grounding_status") == "INSUFFICIENT":
-            st.warning("공식 근거 부족")
+            st.warning("공식 판단 기준 문서 부족")
         elif finding.get("grounding_status") == "GROUNDED":
             claims = _json_list(finding.get("claims_json"))
             references = _json_list(finding.get("references_json"))
@@ -558,10 +558,10 @@ def _render_detail(df: pd.DataFrame) -> None:
                         )
                     if reference_ids:
                         details.append(
-                            f"공식 근거: {', '.join(map(str, reference_ids))}"
+                            f"판단 기준 문서: {', '.join(map(str, reference_ids))}"
                         )
                     st.code("\n".join(details), language="text")
-            st.caption("공식 근거")
+            st.caption("공식 판단 기준 문서")
             for reference in references:
                 st.write(
                     " · ".join(
@@ -614,7 +614,9 @@ def _render_detail(df: pd.DataFrame) -> None:
             )
     with recommendation_tab:
         if finding.get("grounding_status") == "INSUFFICIENT":
-            st.warning("공식 근거 부족: 보고서 초안을 표시하지 않습니다.")
+            st.warning(
+                "공식 판단 기준 문서 부족: 보고서 초안을 표시하지 않습니다."
+            )
             return
         for label, column in (
             ("예상 영향도", "impact"),
@@ -1326,7 +1328,7 @@ def _render_review_tab() -> None:
         ("AI 보조 취약", "ai_vulnerable"),
         ("AI 보조 안전", "ai_safe"),
         ("AI 판정 불가", "ai_inconclusive"),
-        ("공식근거 확보", "ai_grounded"),
+        ("판단기준 문서 확보", "ai_grounded"),
         ("AI 처리 실패", "ai_failed"),
         ("수동 검토 필요", "needs_human_review"),
         ("규칙 취약 의심", "rule_suspected"),

@@ -47,7 +47,7 @@ def test_excel_report_has_safe_review_sheets_and_round_trips() -> None:
         "상세결과",
         "조치권고",
         "판정비교",
-        "공식근거",
+        "판단기준문서",
     ]
     for worksheet in workbook.worksheets:
         assert worksheet["A2"].value == "AI 생성 검토용 초안이며 최종 확인이 필요함"
@@ -79,7 +79,7 @@ def test_excel_report_supports_an_empty_filtered_result() -> None:
         "상세결과",
         "조치권고",
         "판정비교",
-        "공식근거",
+        "판단기준문서",
     ]
     assert workbook["상세결과"].auto_filter.ref == "A4:AJ4"
 
@@ -230,7 +230,7 @@ def test_excel_exports_official_references_and_grounding_counts() -> None:
         BytesIO(build_excel_report(findings, {"scan_run_id": "run-1"})),
         data_only=False,
     )
-    references = workbook["공식근거"]
+    references = workbook["판단기준문서"]
     summary_rows = {
         row[0]: row[1]
         for row in workbook["진단요약"].iter_rows(min_row=5, values_only=True)
@@ -250,9 +250,9 @@ def test_excel_exports_official_references_and_grounding_counts() -> None:
         "source-1",
         "file-1",
     ]
-    assert summary_rows["공식근거 확보"] == 1
-    assert summary_rows["공식근거 부족"] == 1
-    assert summary_rows["공식근거 검증 실패"] == 0
+    assert summary_rows["판단기준 문서 확보"] == 1
+    assert summary_rows["판단기준 문서 부족"] == 1
+    assert summary_rows["판단기준 문서 검증 실패"] == 0
 
 
 def test_excel_rejects_forged_or_unbound_official_references() -> None:
@@ -295,14 +295,14 @@ def test_excel_rejects_forged_or_unbound_official_references() -> None:
         BytesIO(build_excel_report(findings, {"scan_run_id": "run-1"}))
     )
 
-    assert workbook["공식근거"].max_row == 4
+    assert workbook["판단기준문서"].max_row == 4
     summary_rows = {
         row[0]: row[1]
         for row in workbook["진단요약"].iter_rows(min_row=5, values_only=True)
         if row[0] is not None
     }
-    assert summary_rows["공식근거 확보"] == 0
-    assert summary_rows["공식근거 검증 실패"] == 1
+    assert summary_rows["판단기준 문서 확보"] == 0
+    assert summary_rows["판단기준 문서 검증 실패"] == 1
 
 
 def test_excel_summary_counts_grounded_ai_safe_and_vulnerable_findings() -> None:
@@ -383,7 +383,7 @@ def test_excel_summary_counts_grounded_ai_safe_and_vulnerable_findings() -> None
         "상세결과",
         "조치권고",
         "판정비교",
-        "공식근거",
+        "판단기준문서",
     ]
     assert {
         key: summary_rows[key]
@@ -391,9 +391,9 @@ def test_excel_summary_counts_grounded_ai_safe_and_vulnerable_findings() -> None
             "AI 보조 취약",
             "AI 보조 안전",
             "AI 판정 불가",
-            "공식근거 확보",
-            "공식근거 부족",
-            "공식근거 검증 실패",
+            "판단기준 문서 확보",
+            "판단기준 문서 부족",
+            "판단기준 문서 검증 실패",
             "AI 처리 실패",
             "수동 검토 필요",
         )
@@ -401,9 +401,9 @@ def test_excel_summary_counts_grounded_ai_safe_and_vulnerable_findings() -> None
         "AI 보조 취약": 2,
         "AI 보조 안전": 1,
         "AI 판정 불가": 1,
-        "공식근거 확보": 0,
-        "공식근거 부족": 1,
-        "공식근거 검증 실패": 3,
+        "판단기준 문서 확보": 0,
+        "판단기준 문서 부족": 1,
+        "판단기준 문서 검증 실패": 3,
         "AI 처리 실패": 0,
         "수동 검토 필요": 4,
     }
@@ -522,9 +522,9 @@ def test_partial_report_summary_matches_dashboard_status_counts_and_evaluation()
         "AI 보조 취약": summary_rows["AI 보조 취약"],
         "AI 보조 안전": summary_rows["AI 보조 안전"],
         "AI 판정 불가": summary_rows["AI 판정 불가"],
-        "공식근거 확보": summary_rows["공식근거 확보"],
-        "공식근거 부족": summary_rows["공식근거 부족"],
-        "공식근거 검증 실패": summary_rows["공식근거 검증 실패"],
+        "판단기준 문서 확보": summary_rows["판단기준 문서 확보"],
+        "판단기준 문서 부족": summary_rows["판단기준 문서 부족"],
+        "판단기준 문서 검증 실패": summary_rows["판단기준 문서 검증 실패"],
         "AI 처리 실패": summary_rows["AI 처리 실패"],
         "수동 검토 필요": summary_rows["수동 검토 필요"],
         "규칙 취약 의심": summary_rows["규칙 취약 의심"],
@@ -537,9 +537,9 @@ def test_partial_report_summary_matches_dashboard_status_counts_and_evaluation()
         "AI 보조 취약": dashboard_summary["ai_vulnerable"],
         "AI 보조 안전": dashboard_summary["ai_safe"],
         "AI 판정 불가": dashboard_summary["ai_inconclusive"],
-        "공식근거 확보": 0,
-        "공식근거 부족": dashboard_summary["ai_insufficient"],
-        "공식근거 검증 실패": dashboard_summary["ai_grounded"],
+        "판단기준 문서 확보": 0,
+        "판단기준 문서 부족": dashboard_summary["ai_insufficient"],
+        "판단기준 문서 검증 실패": dashboard_summary["ai_grounded"],
         "AI 처리 실패": dashboard_summary["ai_failed"],
         "수동 검토 필요": dashboard_summary["needs_human_review"],
         "규칙 취약 의심": dashboard_summary["rule_suspected"],
